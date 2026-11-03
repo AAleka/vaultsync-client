@@ -25,12 +25,12 @@ int main(int argc, char** argv)
 
 static void print_help(void)
 {
-    const char* help_msg = \
+    const char* help_msg =
         "This is a backup application.\n"
         "Usage: vaultsync_cli <args>\n"
         "<args>:\n" \
         "    --help    / -h - prints this help message\n"
         "    --version / -v - prints the application version\n";
     
-        printf("%s\n", help_msg);
+    printf("%s\n", help_msg);
 }

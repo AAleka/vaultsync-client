@@ -14,6 +14,7 @@ endif()
 # core library
 add_library(vaultsync_core STATIC 
     core/vaultsync.c
+    core/util.c
 )
 target_include_directories(vaultsync_core PUBLIC 
     core/include
