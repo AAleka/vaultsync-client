@@ -29,7 +29,7 @@ static int g_failures = 0;
                 __FILE__, __LINE__); \
             g_failures++; \
         } \
-        if (strcmp((a), (b)) != 0) { \
+        else if (strcmp((a), (b)) != 0) { \
             fprintf(stderr, "%s:%d: CHECK_STR_EQ failed: %s != %s\n", \
                 __FILE__, __LINE__, (a), (b)); \
             g_failures++; \
@@ -43,7 +43,7 @@ static int g_failures = 0;
                 __FILE__, __LINE__); \
             g_failures++; \
         } \
-        if (strcmp((a), (b)) == 0) { \
+        else if (strcmp((a), (b)) == 0) { \
             fprintf(stderr, "%s:%d: CHECK_STR_NOTEQ failed: %s != %s\n", \
                 __FILE__, __LINE__, (a), (b)); \
             g_failures++; \
@@ -255,6 +255,142 @@ static void test_list_empty_string(void)
     vs_str_list_free(&list);
 }
 
+static void test_vs_utf8_to_wide(void)
+{
+    wchar_t* w = NULL;
+
+    CHECK(vs_utf8_to_wide("\xC3\x9C\xE6\x97\xA5", &w) == VS_OK);
+    CHECK(w != NULL);
+    CHECK(wcslen(w) == 2);
+    CHECK(w[0] == 0x00DC);
+    CHECK(w[1] == 0x65E5);
+    free(w);
+    w = NULL;
+
+    CHECK(vs_utf8_to_wide("\xF0\x9F\x98\x80", &w) == VS_OK);   /* 😀 */
+    CHECK(w != NULL);
+    CHECK(wcslen(w) == 2);
+    CHECK(w[0] == 0xD83D);
+    CHECK(w[1] == 0xDE00);
+    free(w);
+    w = NULL;
+
+    CHECK(vs_utf8_to_wide("", &w) == VS_OK);
+    CHECK(w != NULL);
+    CHECK(wcslen(w) == 0);
+    free(w);
+    w = NULL;
+
+    CHECK(vs_utf8_to_wide("\xFF", &w) == VS_ERR_INVALID);
+    CHECK(vs_utf8_to_wide(NULL, &w) == VS_ERR_INVALID);
+    CHECK(vs_utf8_to_wide("a", NULL) == VS_ERR_INVALID);
+    CHECK(w == NULL);
+}
+
+static void test_vs_wide_to_utf8(void)
+{
+    const wchar_t in[] = { 0x00DC, 0x65E5, 0 };   /* "Ü日" */
+    char* out = NULL;
+
+    CHECK(vs_wide_to_utf8(in, &out) == VS_OK);
+    CHECK(out != NULL);
+    CHECK(strlen(out) == 5);
+    CHECK_STR_EQ(out, "\xC3\x9C\xE6\x97\xA5");
+    free(out);
+    out = NULL;
+
+    const wchar_t lone[] = { 0xD800, 0 };
+    CHECK(vs_wide_to_utf8(lone, &out) == VS_ERR_INVALID);
+    CHECK(vs_wide_to_utf8(NULL, &out) == VS_ERR_INVALID);
+    CHECK(vs_wide_to_utf8(in, NULL) == VS_ERR_INVALID);
+    CHECK(out == NULL);
+}
+
+static void test_vs_utf8_to_wide_to_utf8(void)
+{
+    const char* in[] = {
+        "Fotos/\xC3\x9Cn\xC3\xAF" "c\xC3\xB8" "d\xC3\xA9/\xE6\x97\xA5\xE6\x9C\xAC.txt",   /* "Fotos/Ünïcødé/日本.txt" */
+        "",
+    };
+
+    for (size_t i = 0; i < sizeof(in) / sizeof(in[0]); ++i)
+    {
+        wchar_t* w = NULL;
+        char* out = NULL;
+
+        CHECK(vs_utf8_to_wide(in[i], &w) == VS_OK);
+        CHECK(vs_wide_to_utf8(w, &out) == VS_OK);
+        CHECK_STR_EQ(out, in[i]);
+
+        free(w);
+        free(out);
+    }
+}
+
+static void test_vs_path_join(void)
+{
+    char* result = NULL;
+
+    CHECK(vs_path_join("/root/", "home/test.txt", &result) == VS_OK);
+    CHECK_STR_EQ(result, "/root/home/test.txt");
+    free(result);
+    result = NULL;
+
+    CHECK(vs_path_join("/root", "home/test.txt", &result) == VS_OK);
+    CHECK_STR_EQ(result, "/root/home/test.txt");
+    free(result);
+    result = NULL;
+
+    CHECK(vs_path_join("/root/home/test.txt", "", &result) == VS_OK);
+    CHECK_STR_EQ(result, "/root/home/test.txt");
+    free(result);
+    result = NULL;
+
+    CHECK(vs_path_join("/root/home/test.txt", NULL, &result) == VS_ERR_INVALID);
+    CHECK(vs_path_join("/root/home/test.txt", "", NULL) == VS_ERR_INVALID);
+    CHECK(vs_path_join(NULL, "/root/home/test.txt", &result) == VS_ERR_INVALID);
+
+    CHECK(vs_path_join("", "/root/home/test.txt", &result) == VS_OK);
+    CHECK_STR_EQ(result, "/root/home/test.txt");
+    free(result);
+    result = NULL;
+
+    CHECK(vs_path_join("C:/Backups", "objects", &result) == VS_OK);
+    CHECK_STR_EQ(result, "C:/Backups/objects");
+    free(result);
+    result = NULL;
+
+    CHECK(vs_path_join("C:\\Backups\\", "x", &result) == VS_OK);
+    CHECK_STR_EQ(result, "C:\\Backups\\x");
+    free(result);
+    result = NULL;
+
+    CHECK(vs_path_join("C:", "x", &result) == VS_OK);
+    CHECK_STR_EQ(result, "C:/x");
+    free(result);
+    result = NULL;
+
+    CHECK(vs_path_join("", "", &result) == VS_ERR_INVALID);
+    CHECK(result == NULL);
+}
+
+static void test_vs_hex(void)
+{
+    uint8_t b[] = { 0x00, 0xAB, 0xFF };
+    char out[7];
+    vs_hex(b, 3, out);
+    CHECK_STR_EQ(out, "00abff");
+
+    char empty[1];
+    vs_hex(b, 0, empty);
+    CHECK_STR_EQ(empty, "");
+
+    uint8_t all[] = { 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF };
+    char out2[17];
+    vs_hex(all, 8, out2);
+    CHECK_STR_EQ(out2, "0123456789abcdef");
+}
+
 int main(void)
 {
 #ifdef VS_LEAK_CHECK
@@ -282,6 +418,11 @@ int main(void)
         TEST(test_list_invalid),
         TEST(test_list_free),
         TEST(test_list_empty_string),
+        TEST(test_vs_utf8_to_wide),
+        TEST(test_vs_wide_to_utf8),
+        TEST(test_vs_utf8_to_wide_to_utf8),
+        TEST(test_vs_path_join),
+        TEST(test_vs_hex),
     };
     size_t len = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < len; ++i)
