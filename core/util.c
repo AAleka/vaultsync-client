@@ -1,14 +1,17 @@
-#include <vaultsync/vaultsync.h>
 #include <string.h>
 #include <stdlib.h>
 
 #define WIN32_LEAN_AND_MEAN 1
 #include <windows.h>
 
+#include <vaultsync/vaultsync.h>
 #include "util.h"
 
-static char* vs_strdup(const char* s)
+char* vs_strdup(const char* s)
 {
+    if (!s)
+        return NULL;
+
     size_t len = strlen(s);
 
     char* copy;

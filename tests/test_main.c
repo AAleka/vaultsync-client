@@ -3,7 +3,8 @@
 #include <string.h>
 
 #include <vaultsync/vaultsync.h>
-#include"util.h"
+#include "util.h"
+#include "scanner.h"
 
 /* MSVC Debug builds only: the CRT debug heap tracks every allocation. */
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -76,7 +77,7 @@ static void test_strerr(void)
     CHECK_STR_EQ(vs_strerr(42), "unknown error code");
 } 
 
-static void test_list_init(void)
+static void test_vs_str_list_init(void)
 {
     vs_str_list list;
     vs_str_list_init(&list);
@@ -90,7 +91,7 @@ static void test_list_init(void)
     vs_str_list_init(NULL);
 }
 
-static void test_list_push_basic(void)
+static void test_vs_str_list_push_basic(void)
 {
     vs_str_list list;
     vs_str_list_init(&list);
@@ -112,7 +113,7 @@ static void test_list_push_basic(void)
     vs_str_list_free(&list);
 }
 
-static void test_list_push_copies(void)
+static void test_vs_str_list_push_copies(void)
 {
     vs_str_list list;
     vs_str_list_init(&list);
@@ -127,7 +128,7 @@ static void test_list_push_copies(void)
     vs_str_list_free(&list);
 }
 
-static void test_list_growth(void)
+static void test_vs_str_list_growth(void)
 {
     vs_str_list list;
     vs_str_list_init(&list);
@@ -162,7 +163,7 @@ static void test_list_growth(void)
     vs_str_list_free(&list);
 }
 
-static void test_list_many(void)
+static void test_vs_str_list_many(void)
 {    
     vs_str_list list;
     vs_str_list_init(&list);
@@ -185,7 +186,7 @@ static void test_list_many(void)
     vs_str_list_free(&list);
 }
 
-static void test_list_invalid(void)
+static void test_vs_str_list_invalid(void)
 {
     vs_str_list list;
     vs_str_list_init(&list);
@@ -199,7 +200,7 @@ static void test_list_invalid(void)
     vs_str_list_free(&list);
 }
 
-static void test_list_free(void)
+static void test_vs_str_list_free(void)
 {
     vs_str_list list;
     vs_str_list_init(&list);
@@ -239,7 +240,7 @@ static void test_list_free(void)
     vs_str_list_free(&list);
 }
 
-static void test_list_empty_string(void)
+static void test_vs_str_list_empty_string(void)
 {
     vs_str_list list;
     vs_str_list_init(&list);
@@ -391,6 +392,99 @@ static void test_vs_hex(void)
     CHECK_STR_EQ(out2, "0123456789abcdef");
 }
 
+static void test_vs_file_list_init(void)
+{
+    vs_file_list list;
+    vs_file_list_init(&list);
+
+    CHECK(list.count == 0);
+    CHECK(list.capacity == 0);
+    CHECK(list.items == NULL);
+
+    vs_file_list_free(&list);
+
+    vs_file_list_init(NULL);
+}
+
+static void test_vs_file_list_push(void)
+{
+    vs_file_list list;
+    vs_file_list_init(&list);
+
+    const int num_entries = 100000;
+    
+    for (int i = 0; i < num_entries; ++i)
+    {
+        vs_file_entry f;
+        char rel_path[64];
+        if (i % 3 == 0)
+        {
+            snprintf(rel_path, 64, "/test/dir_%d", i);
+            f.is_dir = 1;
+            f.rel_path = rel_path;
+            f.size = 4324235;
+            f.mtime = 54356546;
+        }
+        else
+        {
+            snprintf(rel_path, 64, "/test/file_%d", i);
+            f.is_dir = 0;
+            f.rel_path = rel_path;
+            f.size = 3424234;
+            f.mtime = 6457568758;
+        }
+
+        CHECK(vs_file_list_push(&list, &f) == VS_OK);
+    }
+
+    CHECK(list.capacity == 131072);
+    CHECK_STR_EQ(list.items[1].rel_path, "/test/file_1");
+    CHECK(list.items[1].is_dir == 0);
+    CHECK(list.items[1].size == 3424234);
+    CHECK(list.items[1].mtime == 6457568758);
+    CHECK_STR_EQ(list.items[99999].rel_path, "/test/dir_99999");
+    CHECK(list.items[99999].is_dir == 1);
+    CHECK(list.items[99999].size == 4324235);
+    CHECK(list.items[99999].mtime == 54356546);
+
+    vs_file_list_free(&list);
+}
+
+static void test_vs_file_list_free(void)
+{
+    vs_file_list list;
+    vs_file_list_init(&list);
+
+    vs_file_entry f = {"/test/test.txt", 5435345, 3123123213, 0};
+    vs_file_entry d = {"/test/tests/", 432423445, 3331221313, 1};
+
+    CHECK(vs_file_list_push(&list, &f) == VS_OK);
+    CHECK(vs_file_list_push(&list, &d) == VS_OK);
+
+    CHECK(list.count == 2);
+    CHECK(list.capacity == 8);
+    CHECK_STR_EQ(list.items[0].rel_path, "/test/test.txt");
+    CHECK_STR_EQ(list.items[1].rel_path, "/test/tests/");
+
+    vs_file_list_free(&list);
+
+    CHECK(list.count == 0);
+    CHECK(list.capacity == 0);
+    CHECK(list.items == NULL);
+
+    vs_file_list_free(&list);
+
+    CHECK(vs_file_list_push(&list, &f) == VS_OK);
+    CHECK(vs_file_list_push(&list, &d) == VS_OK);
+
+    CHECK(list.count == 2);
+    CHECK(list.capacity == 8);
+    CHECK_STR_EQ(list.items[0].rel_path, "/test/test.txt");
+    CHECK_STR_EQ(list.items[1].rel_path, "/test/tests/");
+
+    vs_file_list_free(&list);
+}
+
 int main(void)
 {
 #ifdef VS_LEAK_CHECK
@@ -410,19 +504,21 @@ int main(void)
 
     Test tests[] = {
         TEST(test_strerr),
-        TEST(test_list_init),
-        TEST(test_list_push_basic),
-        TEST(test_list_push_copies),
-        TEST(test_list_growth),
-        TEST(test_list_many),
-        TEST(test_list_invalid),
-        TEST(test_list_free),
-        TEST(test_list_empty_string),
+        TEST(test_vs_str_list_init),
+        TEST(test_vs_str_list_push_basic),
+        TEST(test_vs_str_list_push_copies),
+        TEST(test_vs_str_list_growth),
+        TEST(test_vs_str_list_many),
+        TEST(test_vs_str_list_invalid),
+        TEST(test_vs_str_list_free),
+        TEST(test_vs_str_list_empty_string),
         TEST(test_vs_utf8_to_wide),
         TEST(test_vs_wide_to_utf8),
         TEST(test_vs_utf8_to_wide_to_utf8),
         TEST(test_vs_path_join),
         TEST(test_vs_hex),
+        TEST(test_vs_file_list_push),
+        TEST(test_vs_file_list_free),
     };
     size_t len = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < len; ++i)

@@ -16,6 +16,7 @@ enable_testing()
 add_library(vaultsync_core STATIC 
     core/vaultsync.c
     core/util.c
+    core/scanner.c
 )
 target_include_directories(vaultsync_core PUBLIC 
     core/include
