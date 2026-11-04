@@ -164,3 +164,22 @@ void vs_hex(const uint8_t* bytes, size_t n, char* out)
     }
     out[2*n] = '\0';
 }
+
+int vs_map_win_error(unsigned long err)
+{
+    switch (err)
+    {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+        return VS_ERR_NOT_FOUND;
+    case ERROR_NOT_ENOUGH_MEMORY:
+    case ERROR_OUTOFMEMORY:
+        return VS_ERR_NOMEM;
+    case ERROR_INVALID_NAME:
+    case ERROR_DIRECTORY:
+    case ERROR_INVALID_PARAMETER:
+        return VS_ERR_INVALID;
+    default:
+        return VS_ERR_IO;       /* access denied, sharing violation, disk errors, ... */
+    }
+}

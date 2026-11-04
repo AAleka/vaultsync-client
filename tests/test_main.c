@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define WIN32_LEAN_AND_MEAN 1
+#include <windows.h>
+
 #include <vaultsync/vaultsync.h>
 #include "util.h"
 #include "scanner.h"
@@ -485,6 +488,140 @@ static void test_vs_file_list_free(void)
     vs_file_list_free(&list);
 }
 
+static int make_dir(const char* root, const char* rel)
+{
+    char* path = NULL;
+    wchar_t* w = NULL;
+    int ok = vs_path_join(root, rel, &path) == VS_OK
+          && vs_utf8_to_wide(path, &w) == VS_OK
+          && (CreateDirectoryW(w, NULL) || GetLastError() == ERROR_ALREADY_EXISTS);
+    free(w);
+    free(path);
+    return ok;
+}
+
+static int make_file(const char* root, const char* rel, unsigned long size)
+{
+    char* path = NULL;
+    wchar_t* w = NULL;
+    int ok = vs_path_join(root, rel, &path) == VS_OK
+          && vs_utf8_to_wide(path, &w) == VS_OK;
+    free(path);
+    if (!ok)
+        return 0;
+
+    HANDLE h = CreateFileW(w, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    free(w);
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+
+    char buf[64];
+    memset(buf, 'x', sizeof(buf));
+    unsigned long written = 0;
+    ok = size <= sizeof(buf) && WriteFile(h, buf, size, &written, NULL) && written == size;
+    CloseHandle(h);
+    return ok;
+}
+
+/* Sorted scan walked backwards gives children before parents. */
+static void remove_tree(const char* root)
+{
+    vs_file_list list;
+    if (vs_scan(root, &list) != VS_OK)
+        return;
+
+    for (size_t i = list.count; i-- > 0; )
+    {
+        char* path = NULL;
+        wchar_t* w = NULL;
+        if (vs_path_join(root, list.items[i].rel_path, &path) == VS_OK
+            && vs_utf8_to_wide(path, &w) == VS_OK)
+        {
+            if (list.items[i].is_dir)
+                RemoveDirectoryW(w);
+            else
+                DeleteFileW(w);
+        }
+        free(w);
+        free(path);
+    }
+    vs_file_list_free(&list);
+
+    wchar_t* w = NULL;
+    if (vs_utf8_to_wide(root, &w) == VS_OK)
+        RemoveDirectoryW(w);
+    free(w);
+}
+
+#define UNI_DIR  "\xC3\x9Cn\xC3\xAF" "c\xC3\xB8" "d\xC3\xA9"     /* "Ünïcødé" */
+#define UNI_FILE "\xE6\x97\xA5\xE6\x9C\xAC.txt"                 /* "日本.txt" */
+
+static void test_vs_scan(void)
+{
+    const char* root = VS_TEST_DIR "/test_vs_scan";
+
+    remove_tree(root);  /* leftovers from a crashed run */
+    CHECK(make_dir(VS_TEST_DIR, ""));
+    CHECK(make_dir(root, ""));
+    CHECK(make_dir(root, "empty"));
+    CHECK(make_dir(root, "nested"));
+    CHECK(make_dir(root, "nested/a"));
+    CHECK(make_dir(root, "nested/a/b"));
+    CHECK(make_dir(root, UNI_DIR));
+    CHECK(make_file(root, "nested/a/b/c.txt", 3));
+    CHECK(make_file(root, "zero.txt", 0));
+    CHECK(make_file(root, "b.txt", 1));
+    CHECK(make_file(root, "a.txt", 2));
+    CHECK(make_file(root, UNI_DIR "/" UNI_FILE, 5));
+
+    const vs_file_entry expected[] = {
+        { "a.txt",                  2, 0, 0 },
+        { "b.txt",                  1, 0, 0 },
+        { "empty",                  0, 0, 1 },
+        { "nested",                 0, 0, 1 },
+        { "nested/a",               0, 0, 1 },
+        { "nested/a/b",             0, 0, 1 },
+        { "nested/a/b/c.txt",       3, 0, 0 },
+        { "zero.txt",               0, 0, 0 },
+        { UNI_DIR,                  0, 0, 1 },
+        { UNI_DIR "/" UNI_FILE,     5, 0, 0 },
+    };
+    const size_t n = sizeof(expected) / sizeof(expected[0]);
+
+    vs_file_list list;
+    CHECK(vs_scan(root, &list) == VS_OK);
+    CHECK(list.count == n);
+    for (size_t i = 0; i < n && i < list.count; ++i)
+    {
+        CHECK_STR_EQ(list.items[i].rel_path, expected[i].rel_path);
+        CHECK(list.items[i].size == expected[i].size);
+        CHECK(list.items[i].is_dir == expected[i].is_dir);
+        CHECK(list.items[i].mtime != 0);
+        CHECK(strchr(list.items[i].rel_path, '\\') == NULL);
+    }
+    vs_file_list_free(&list);
+
+    /* empty dir */
+    char* empty = NULL;
+    CHECK(vs_path_join(root, "empty", &empty) == VS_OK);
+    CHECK(vs_scan(empty, &list) == VS_OK);
+    CHECK(list.count == 0);
+    vs_file_list_free(&list);
+    free(empty);
+
+    /* errors */
+    char* file = NULL;
+    CHECK(vs_path_join(root, "a.txt", &file) == VS_OK);
+    CHECK(vs_scan(file, &list) == VS_ERR_INVALID);
+    free(file);
+    CHECK(vs_scan(VS_TEST_DIR "/no_such_dir", &list) == VS_ERR_NOT_FOUND);
+    CHECK(vs_scan("", &list) == VS_ERR_INVALID);
+    CHECK(vs_scan(NULL, &list) == VS_ERR_INVALID);
+    CHECK(vs_scan(root, NULL) == VS_ERR_INVALID);
+
+    // remove_tree(root);
+}
+
 int main(void)
 {
 #ifdef VS_LEAK_CHECK
@@ -517,8 +654,10 @@ int main(void)
         TEST(test_vs_utf8_to_wide_to_utf8),
         TEST(test_vs_path_join),
         TEST(test_vs_hex),
+        TEST(test_vs_file_list_init),
         TEST(test_vs_file_list_push),
         TEST(test_vs_file_list_free),
+        TEST(test_vs_scan),
     };
     size_t len = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < len; ++i)

@@ -27,6 +27,8 @@ void vs_file_list_init(vs_file_list* list);
 int vs_file_list_push(vs_file_list* list, const vs_file_entry *f);
 void vs_file_list_free(vs_file_list* list);
 
+int vs_scan(const char* root, vs_file_list* out);
+
 #ifdef __cplusplus
 }
 #endif

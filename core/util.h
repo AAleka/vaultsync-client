@@ -15,6 +15,8 @@ int vs_wide_to_utf8(const wchar_t* s, char** out);
 int vs_path_join(const char* a, const char* b, char** out);
 void vs_hex(const uint8_t* bytes, size_t n, char* out);
 
+int vs_map_win_error(unsigned long err);
+
 #ifdef __cplusplus
 }
 #endif

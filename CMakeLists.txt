@@ -26,6 +26,7 @@ target_include_directories(vaultsync_core PUBLIC
 add_executable(vaultsync_tests tests/test_main.c)
 target_link_libraries(vaultsync_tests PRIVATE vaultsync_core)
 target_include_directories(vaultsync_tests PRIVATE core)
+target_compile_definitions(vaultsync_tests PRIVATE VS_TEST_DIR="${CMAKE_BINARY_DIR}/tests")
 add_test(NAME unit COMMAND vaultsync_tests)
 
 # CLI
@@ -34,6 +35,9 @@ add_executable(vaultsync_cli
 )
 target_link_libraries(vaultsync_cli PRIVATE 
     vaultsync_core
+)
+target_include_directories(vaultsync_cli PRIVATE
+    core
 )
 
 foreach(t vaultsync_core vaultsync_cli vaultsync_tests)
