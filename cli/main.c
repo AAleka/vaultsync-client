@@ -7,9 +7,13 @@
 
 #include <vaultsync/vaultsync.h>
 #include "scanner.h"
+#include "hash.h"
 
 static void print_help(void);
 static int cmd_scan(const char* dir);
+
+static int print_chunk(void* user, const void* data, size_t n);
+static int cmd_hash(const char* path);
 
 int main(int argc, char** argv)
 {
@@ -39,6 +43,17 @@ int main(int argc, char** argv)
 
             return cmd_scan(argv[2]);
         }
+        else if (strcmp(argv[1], "hash") == 0)
+        {
+            if (argc == 2)
+            {
+                fprintf(stderr, "missing argument <file> for 'hash'\n");
+                print_help();
+                return 1;
+            }
+
+            return cmd_hash(argv[2]);
+        }
         else
         {
             fprintf(stderr, "invalid argument '%s'\n", argv[1]);
@@ -58,7 +73,8 @@ static void print_help(void)
         "<args>:\n" \
         "    --help    / -h - prints this help message\n"
         "    --version / -v - prints the application version\n"
-        "      scan <dir>   - scans contents of a given directory\n";
+        "      scan <dir>   - scans contents of a given directory\n"
+        "      hash <file>  - prints index, size and hash of each 1 MiB chunk\n";
     
     printf("%s\n", help_msg);
 }
@@ -128,4 +144,42 @@ static int cmd_scan(const char* dir)
     vs_file_list_free(&list);
     
     return VS_OK;
+}
+
+static int print_chunk(void* user, const void* data, size_t n)
+{
+    if (!user || (!data && n))
+        return VS_ERR_INVALID;
+
+    size_t* counter = user;
+
+    char out_hex[VS_HASH_HEX_LEN + 1];
+    int rc = VS_OK;
+
+    rc = vs_hash(data, n, out_hex);
+    if (rc != VS_OK)
+        return rc;
+    
+    printf("%zu %zu %s\n", *counter, n, out_hex);
+    (*counter)++;
+
+    return rc;
+}
+
+static int cmd_hash(const char* path)
+{
+    size_t chunk_counter = 0;
+    int rc = VS_OK;
+
+    rc = vs_chunk_file(path, print_chunk, &chunk_counter);
+    if (rc != VS_OK)
+    {
+        fprintf(stderr, "hash '%s': %s\n", path, vs_strerr(rc));
+        return 1;
+    }
+
+    if (chunk_counter == 0)
+        printf("(empty file, 0 chunks)\n");
+
+    return 0;
 }

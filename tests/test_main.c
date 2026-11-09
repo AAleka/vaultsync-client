@@ -8,6 +8,7 @@
 #include <vaultsync/vaultsync.h>
 #include "util.h"
 #include "scanner.h"
+#include "hash.h"
 
 /* MSVC Debug builds only: the CRT debug heap tracks every allocation. */
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -16,6 +17,10 @@
 #endif
 
 static int g_failures = 0;
+
+#ifndef VS_TEST_DIR
+#define VS_TEST_DIR "build"
+#endif
 
 #define CHECK(cond) \
     do { \
@@ -560,7 +565,7 @@ static void test_vs_scan(void)
 {
     const char* root = VS_TEST_DIR "/test_vs_scan";
 
-    remove_tree(root);  /* leftovers from a crashed run */
+    remove_tree(root);
     CHECK(make_dir(VS_TEST_DIR, ""));
     CHECK(make_dir(root, ""));
     CHECK(make_dir(root, "empty"));
@@ -601,7 +606,6 @@ static void test_vs_scan(void)
     }
     vs_file_list_free(&list);
 
-    /* empty dir */
     char* empty = NULL;
     CHECK(vs_path_join(root, "empty", &empty) == VS_OK);
     CHECK(vs_scan(empty, &list) == VS_OK);
@@ -609,7 +613,6 @@ static void test_vs_scan(void)
     vs_file_list_free(&list);
     free(empty);
 
-    /* errors */
     char* file = NULL;
     CHECK(vs_path_join(root, "a.txt", &file) == VS_OK);
     CHECK(vs_scan(file, &list) == VS_ERR_INVALID);
@@ -619,7 +622,203 @@ static void test_vs_scan(void)
     CHECK(vs_scan(NULL, &list) == VS_ERR_INVALID);
     CHECK(vs_scan(root, NULL) == VS_ERR_INVALID);
 
-    // remove_tree(root);
+    remove_tree(root);
+}
+
+static void test_vs_hash(void)
+{
+    static const struct {
+        size_t len;
+        const char* expected;
+    } cases[] = {
+        {
+            0,
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        },
+        {
+            1,
+            "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213"
+        },
+        {
+            63,
+            "e9bc37a594daad83be9470df7f7b3798297c3d834ce80ba85d6e207627b7db7b"
+        },
+        {
+            64,
+            "4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98"
+        },
+        {
+            65,
+            "de1e5fa0be70df6d2be8fffd0e99ceaa8eb6e8c93a63f2d8d1c30ecb6b263dee"
+        },
+    };
+
+    uint8_t buf[65];
+    char out_hex[VS_HASH_HEX_LEN + 1];
+
+    for (size_t i = 0; i < sizeof(buf); ++i)
+        buf[i] = (uint8_t)(i % 251);
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        memset(out_hex, 0xAA, sizeof(out_hex));
+
+        CHECK(vs_hash(buf, cases[i].len, out_hex) == VS_OK);
+        CHECK_STR_EQ(out_hex, cases[i].expected);
+        CHECK(strlen(out_hex) == VS_HASH_HEX_LEN);
+    }
+
+    CHECK(vs_hash(NULL, 1, out_hex) == VS_ERR_INVALID);
+    CHECK(vs_hash(buf, sizeof(buf), NULL) == VS_ERR_INVALID);
+
+    CHECK(vs_hash(NULL, 0, out_hex) == VS_OK);
+    CHECK_STR_EQ(out_hex, cases[0].expected);
+}
+
+#define MAX_REC_CHUNKS 8
+
+/* What the test callback saw; passed to vs_chunk_file as `user`. */
+typedef struct {
+    size_t count;                                       /* callbacks received */
+    size_t sizes[MAX_REC_CHUNKS];
+    char   hashes[MAX_REC_CHUNKS][VS_HASH_HEX_LEN + 1];
+    size_t stop_after;                                  /* 0 = never; else cancel on that call */
+} chunk_rec;
+
+static int on_chunk_cb(void* user, const void* data, size_t n)
+{
+    chunk_rec* rec = user;
+    if (rec->count < MAX_REC_CHUNKS)
+    {
+        rec->sizes[rec->count] = n;
+        vs_hash(data, n, rec->hashes[rec->count]);
+    }
+    rec->count++;
+
+    if (rec->stop_after && rec->count == rec->stop_after)
+        return VS_ERR_CANCELLED;
+    return VS_OK;
+}
+
+static int on_chunk_ignore_user(void* user, const void* data, size_t n)
+{
+    (void)user;
+    (void)data;
+    (void)n;
+    return VS_OK;
+}
+
+/* Byte at file offset i is i % 251, so every 1 MiB chunk has different content
+   and a chunk read from the wrong offset gets the wrong hash. */
+static void fill_pattern(uint8_t* buf, size_t n, size_t offset)
+{
+    for (size_t i = 0; i < n; ++i)
+        buf[i] = (uint8_t)((offset + i) % 251);
+}
+
+static int make_pattern_file(const char* path, size_t size)
+{
+    wchar_t* w = NULL;
+    if (vs_utf8_to_wide(path, &w) != VS_OK)
+        return 0;
+
+    HANDLE h = CreateFileW(w, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    free(w);
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+
+    static uint8_t block[64 * 1024];
+    size_t done = 0;
+    int ok = 1;
+    while (ok && done < size)
+    {
+        size_t want = size - done < sizeof(block) ? size - done : sizeof(block);
+        unsigned long written = 0;
+        fill_pattern(block, want, done);
+        ok = WriteFile(h, block, (DWORD)want, &written, NULL) && written == want;
+        done += want;
+    }
+    CloseHandle(h);
+    return ok;
+}
+
+/* Writes a pattern file of `size` bytes, chunks it, and checks the number of
+   chunks, each chunk's size, and each chunk's hash. */
+static void check_chunks(const char* root, const char* name, size_t size)
+{
+    char* path = NULL;
+    CHECK(vs_path_join(root, name, &path) == VS_OK);
+    CHECK(make_pattern_file(path, size));
+
+    chunk_rec rec;
+    memset(&rec, 0, sizeof(rec));
+    CHECK(vs_chunk_file(path, on_chunk_cb, &rec) == VS_OK);
+
+    size_t expected = (size + VS_CHUNK_SIZE - 1) / VS_CHUNK_SIZE;
+    CHECK(rec.count == expected);
+    if (rec.count != expected)
+        fprintf(stderr, "  %s (%zu bytes): got %zu chunks, expected %zu\n",
+            name, size, rec.count, expected);
+
+    uint8_t* want = malloc(VS_CHUNK_SIZE);
+    CHECK(want != NULL);
+    for (size_t i = 0; want && i < expected && i < MAX_REC_CHUNKS; ++i)
+    {
+        size_t off = i * VS_CHUNK_SIZE;
+        size_t len = size - off < VS_CHUNK_SIZE ? size - off : VS_CHUNK_SIZE;
+        char hex[VS_HASH_HEX_LEN + 1];
+
+        CHECK(rec.sizes[i] == len);
+        fill_pattern(want, len, off);
+        CHECK(vs_hash(want, len, hex) == VS_OK);
+        CHECK_STR_EQ(rec.hashes[i], hex);
+    }
+    free(want);
+    free(path);
+}
+
+static void test_vs_chunk_file(void)
+{
+    const char* root = VS_TEST_DIR "/test_vs_chunk_file";
+
+    remove_tree(root);
+    CHECK(make_dir(VS_TEST_DIR, ""));
+    CHECK(make_dir(root, ""));
+
+    /* chunk counts and boundaries */
+    check_chunks(root, "empty.bin", 0);
+    check_chunks(root, "small.bin", 1000);
+    check_chunks(root, "under.bin", VS_CHUNK_SIZE - 1);
+    check_chunks(root, "exact.bin", VS_CHUNK_SIZE);
+    check_chunks(root, "over.bin",  VS_CHUNK_SIZE + 1);
+    check_chunks(root, "3_5.bin",   3 * VS_CHUNK_SIZE + VS_CHUNK_SIZE / 2);
+    check_chunks(root, UNI_FILE,    10);
+
+    char* path = NULL;
+    CHECK(vs_path_join(root, "3_5.bin", &path) == VS_OK);
+
+    /* callback error stops reading and is returned as-is */
+    chunk_rec rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.stop_after = 1;
+    CHECK(vs_chunk_file(path, on_chunk_cb, &rec) == VS_ERR_CANCELLED);
+    CHECK(rec.count == 1);
+
+    /* user is the caller's business; NULL is allowed */
+    CHECK(vs_chunk_file(path, on_chunk_ignore_user, NULL) == VS_OK);
+
+    /* errors: callback must never be called */
+    char* missing = NULL;
+    CHECK(vs_path_join(root, "missing.bin", &missing) == VS_OK);
+    memset(&rec, 0, sizeof(rec));
+    CHECK(vs_chunk_file(missing, on_chunk_cb, &rec) == VS_ERR_NOT_FOUND);
+    CHECK(vs_chunk_file(root, on_chunk_cb, &rec) != VS_OK);    /* a directory */
+    CHECK(vs_chunk_file(NULL, on_chunk_cb, &rec) == VS_ERR_INVALID);
+    CHECK(vs_chunk_file(path, NULL, &rec) == VS_ERR_INVALID);
+    CHECK(rec.count == 0);
+
+    free(missing);
+    free(path);
+    remove_tree(root);
 }
 
 int main(void)
@@ -658,6 +857,8 @@ int main(void)
         TEST(test_vs_file_list_push),
         TEST(test_vs_file_list_free),
         TEST(test_vs_scan),
+        TEST(test_vs_hash),
+        TEST(test_vs_chunk_file),
     };
     size_t len = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < len; ++i)
