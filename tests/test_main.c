@@ -9,6 +9,7 @@
 #include "util.h"
 #include "scanner.h"
 #include "hash.h"
+#include "storage.h"
 
 /* MSVC Debug builds only: the CRT debug heap tracks every allocation. */
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -821,6 +822,419 @@ static void test_vs_chunk_file(void)
     remove_tree(root);
 }
 
+#define REPO_META "vaultsync-repo 1\n"
+
+/* 1 if the file at root/rel holds exactly n bytes equal to data. */
+static int file_equals(const char* root, const char* rel, const void* data, size_t n)
+{
+    char* path = NULL;
+    if (vs_path_join(root, rel, &path) != VS_OK)
+        return 0;
+
+    FILE* f = NULL;
+    fopen_s(&f, path, "rb");
+    free(path);
+    if (!f)
+        return 0;
+
+    char buf[256];
+    size_t got = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    return got == n && memcmp(buf, data, n) == 0;
+}
+
+/* Number of entries below root/rel, or (size_t)-1 if it can't be scanned. */
+static size_t count_entries(const char* root, const char* rel)
+{
+    char* path = NULL;
+    vs_file_list list;
+    size_t count = (size_t)-1;
+
+    if (vs_path_join(root, rel, &path) == VS_OK && vs_scan(path, &list) == VS_OK)
+    {
+        count = list.count;
+        vs_file_list_free(&list);
+    }
+    free(path);
+    return count;
+}
+
+static int remove_dir(const char* root, const char* rel)
+{
+    char* path = NULL;
+    wchar_t* w = NULL;
+    int ok = vs_path_join(root, rel, &path) == VS_OK
+          && vs_utf8_to_wide(path, &w) == VS_OK
+          && RemoveDirectoryW(w);
+    free(w);
+    free(path);
+    return ok;
+}
+
+static void test_vs_local_init(void)
+{
+    const char* root = VS_TEST_DIR "/test_vs_local_init";
+
+    remove_tree(root);
+    CHECK(make_dir(VS_TEST_DIR, ""));
+
+    /* fresh repo: folders, meta file with exact bytes, nothing left in tmp */
+    CHECK(vs_local_init(root) == VS_OK);
+    CHECK(count_entries(root, "objects") == 0);
+    CHECK(count_entries(root, "snapshots") == 0);
+    CHECK(count_entries(root, "tmp") == 0);
+    CHECK(file_equals(root, "repository.meta", REPO_META, sizeof(REPO_META) - 1));
+
+    /* second init refuses and leaves the repo untouched */
+    CHECK(vs_local_init(root) != VS_OK);
+    CHECK(file_equals(root, "repository.meta", REPO_META, sizeof(REPO_META) - 1));
+    CHECK(count_entries(root, "tmp") == 0);
+
+    /* parent folder doesn't exist: CreateDirectoryW creates one level only */
+    CHECK(vs_local_init(VS_TEST_DIR "/no_such_parent/repo") == VS_ERR_NOT_FOUND);
+
+    CHECK(vs_local_init(NULL) == VS_ERR_INVALID);
+
+    remove_tree(root);
+}
+
+static void test_vs_local_open(void)
+{
+    const char* root = VS_TEST_DIR "/test_vs_local_open";
+    vs_storage s;
+
+    remove_tree(root);
+    CHECK(make_dir(VS_TEST_DIR, ""));
+    CHECK(make_dir(root, ""));
+
+    /* good repo: every function pointer filled, close succeeds */
+    CHECK(vs_local_init(VS_TEST_DIR "/test_vs_local_open/good") == VS_OK);
+    int rc = vs_local_open(VS_TEST_DIR "/test_vs_local_open/good", &s);
+    CHECK(rc == VS_OK);
+    if (rc == VS_OK)    /* on failure s may not be usable; don't crash the runner */
+    {
+        CHECK(s.ctx != NULL);
+        CHECK(s.has_object != NULL);
+        CHECK(s.put_object != NULL);
+        CHECK(s.get_object != NULL);
+        CHECK(s.put_snapshot != NULL);
+        CHECK(s.get_snapshot != NULL);
+        CHECK(s.list_snapshots != NULL);
+        CHECK(s.close != NULL);
+        CHECK(s.close(s.ctx) == VS_OK);
+    }
+
+    /* not a repo: no meta file -> NOT_FOUND and out is left all NULL */
+    CHECK(make_dir(root, "empty"));
+    memset(&s, 0xAB, sizeof(s));
+    CHECK(vs_local_open(VS_TEST_DIR "/test_vs_local_open/empty", &s) == VS_ERR_NOT_FOUND);
+    CHECK(s.ctx == NULL && s.close == NULL && s.has_object == NULL);
+    CHECK(vs_local_open(VS_TEST_DIR "/test_vs_local_open/missing", &s) == VS_ERR_NOT_FOUND);
+
+    /* meta with wrong length, and with right length but wrong bytes */
+    CHECK(vs_local_init(VS_TEST_DIR "/test_vs_local_open/short") == VS_OK);
+    CHECK(make_file(root, "short/repository.meta", 5));
+    CHECK(vs_local_open(VS_TEST_DIR "/test_vs_local_open/short", &s) == VS_ERR_CORRUPT);
+
+    CHECK(vs_local_init(VS_TEST_DIR "/test_vs_local_open/samelen") == VS_OK);
+    CHECK(make_file(root, "samelen/repository.meta", sizeof(REPO_META) - 1));
+    CHECK(vs_local_open(VS_TEST_DIR "/test_vs_local_open/samelen", &s) == VS_ERR_CORRUPT);
+
+    /* a required folder is missing, or is a file instead of a folder */
+    CHECK(vs_local_init(VS_TEST_DIR "/test_vs_local_open/nosnap") == VS_OK);
+    CHECK(remove_dir(root, "nosnap/snapshots"));
+    CHECK(vs_local_open(VS_TEST_DIR "/test_vs_local_open/nosnap", &s) == VS_ERR_CORRUPT);
+    CHECK(make_file(root, "nosnap/snapshots", 1));
+    CHECK(vs_local_open(VS_TEST_DIR "/test_vs_local_open/nosnap", &s) == VS_ERR_CORRUPT);
+
+    CHECK(vs_local_open(NULL, &s) == VS_ERR_INVALID);
+    CHECK(vs_local_open(VS_TEST_DIR "/test_vs_local_open/good", NULL) == VS_ERR_INVALID);
+
+    remove_tree(root);
+}
+
+static void test_vs_local_has_object(void)
+{
+    const char* root = VS_TEST_DIR "/test_vs_local_has_object";
+    vs_storage s;
+    int exists = -1;
+
+    remove_tree(root);
+    CHECK(make_dir(VS_TEST_DIR, ""));
+    CHECK(vs_local_init(root) == VS_OK);
+    int rc = vs_local_open(root, &s);
+    CHECK(rc == VS_OK);
+    if (rc != VS_OK)
+    {
+        remove_tree(root);
+        return;
+    }
+
+    char id[VS_HASH_HEX_LEN + 1];
+    CHECK(vs_hash("hello", 5, id) == VS_OK);
+
+    /* not stored yet: a successful "no", not an error */
+    CHECK(s.has_object(s.ctx, id, &exists) == VS_OK);
+    CHECK(exists == 0);
+
+    /* put a file exactly where the layout says objects/<id[0..1]>/<id> goes */
+    char sub[3] = { id[0], id[1], '\0' };
+    char* objects = NULL;
+    CHECK(vs_path_join(root, "objects", &objects) == VS_OK);
+    CHECK(make_dir(objects, sub));
+    char* rel = NULL;
+    CHECK(vs_path_join(sub, id, &rel) == VS_OK);
+    CHECK(make_file(objects, rel, 5));
+
+    exists = -1;
+    CHECK(s.has_object(s.ctx, id, &exists) == VS_OK);
+    CHECK(exists == 1);
+
+    /* a folder where an object should be means the repo is damaged */
+    char id2[VS_HASH_HEX_LEN + 1];
+    CHECK(vs_hash("world", 5, id2) == VS_OK);
+    char sub2[3] = { id2[0], id2[1], '\0' };
+    char* rel2 = NULL;
+    CHECK(make_dir(objects, sub2));
+    CHECK(vs_path_join(sub2, id2, &rel2) == VS_OK);
+    CHECK(make_dir(objects, rel2));
+    CHECK(s.has_object(s.ctx, id2, &exists) == VS_ERR_CORRUPT);
+
+    /* ids that must never become paths */
+    char upper[VS_HASH_HEX_LEN + 1];
+    char short_id[VS_HASH_HEX_LEN];
+    memset(upper, 'A', VS_HASH_HEX_LEN);
+    upper[VS_HASH_HEX_LEN] = '\0';
+    memset(short_id, 'a', VS_HASH_HEX_LEN - 1);
+    short_id[VS_HASH_HEX_LEN - 1] = '\0';
+
+    CHECK(s.has_object(s.ctx, "../x", &exists) == VS_ERR_INVALID);
+    CHECK(s.has_object(s.ctx, "", &exists) == VS_ERR_INVALID);
+    CHECK(s.has_object(s.ctx, NULL, &exists) == VS_ERR_INVALID);
+    CHECK(s.has_object(s.ctx, upper, &exists) == VS_ERR_INVALID);
+    CHECK(s.has_object(s.ctx, short_id, &exists) == VS_ERR_INVALID);
+    CHECK(s.has_object(s.ctx, id, NULL) == VS_ERR_INVALID);
+    CHECK(s.has_object(NULL, id, &exists) == VS_ERR_INVALID);
+
+    free(rel2);
+    free(rel);
+    free(objects);
+    CHECK(s.close(s.ctx) == VS_OK);
+    remove_tree(root);
+}
+
+static void test_vs_local_put_object(void)
+{
+    const char* root = VS_TEST_DIR "/test_vs_local_put_object";
+    vs_storage s;
+    int exists = -1;
+
+    remove_tree(root);
+    CHECK(make_dir(VS_TEST_DIR, ""));
+    CHECK(vs_local_init(root) == VS_OK);
+    int rc = vs_local_open(root, &s);
+    CHECK(rc == VS_OK);
+    if (rc != VS_OK)
+    {
+        remove_tree(root);
+        return;
+    }
+
+    char id[VS_HASH_HEX_LEN + 1];
+    CHECK(vs_hash("hello", 5, id) == VS_OK);
+
+    /* not stored yet: a successful "no", not an error */
+    CHECK(s.has_object(s.ctx, id, &exists) == VS_OK);
+    CHECK(exists == 0);
+
+    CHECK(s.put_object(s.ctx, id, "hello", 5) == VS_OK);
+    
+    CHECK(s.has_object(s.ctx, id, &exists) == VS_OK);
+    CHECK(exists == 1);
+
+    /* check data correctness */
+    void* data = NULL;
+    size_t size = 0;
+    CHECK(s.get_object(s.ctx, id, &data, &size) == VS_OK);
+    CHECK(size == 5);
+    CHECK(data && memcmp(data, "hello", 5) == 0);
+    free(data);
+    data = NULL;
+    size = 0;
+
+    CHECK(vs_hash(NULL, 0, id) == VS_OK);
+    CHECK(s.put_object(s.ctx, id, NULL, 1) == VS_ERR_INVALID);
+    CHECK(s.put_object(s.ctx, id, NULL, 0) == VS_OK);
+
+    CHECK(s.get_object(s.ctx, id, &data, &size) == VS_OK);
+    CHECK(size == 0);
+    free(data);
+
+    CHECK(s.put_object(NULL, id, "hello", 5) == VS_ERR_INVALID);
+    CHECK(s.put_object(s.ctx, NULL, "hello", 5) == VS_ERR_INVALID);
+    CHECK(s.put_object(s.ctx, id, NULL, 5) == VS_ERR_INVALID);
+
+    CHECK(s.close(s.ctx) == VS_OK);
+    remove_tree(root);
+}
+
+/* Fresh repo at root, opened into s. 0 if anything failed (already CHECKed). */
+static int open_fresh_repo(const char* root, vs_storage* s)
+{
+    remove_tree(root);
+    CHECK(make_dir(VS_TEST_DIR, ""));
+    CHECK(vs_local_init(root) == VS_OK);
+    int rc = vs_local_open(root, s);
+    CHECK(rc == VS_OK);
+    if (rc != VS_OK)
+    {
+        remove_tree(root);
+        return 0;
+    }
+    return 1;
+}
+
+/* A valid object id: two given chars, then 62 x fill. */
+static void make_id(char out[VS_HASH_HEX_LEN + 1], const char* prefix, char fill)
+{
+    memset(out, fill, VS_HASH_HEX_LEN);
+    out[0] = prefix[0];
+    out[1] = prefix[1];
+    out[VS_HASH_HEX_LEN] = '\0';
+}
+
+static void test_vs_local_get_object(void)
+{
+    const char* root = VS_TEST_DIR "/test_vs_local_get_object";
+    vs_storage s;
+    if (!open_fresh_repo(root, &s))
+        return;
+
+    char id[VS_HASH_HEX_LEN + 1];
+    CHECK(vs_hash("hello", 5, id) == VS_OK);
+
+    /* missing: NOT_FOUND, and the outputs are reset, not left as junk */
+    void* data = (void*)1;
+    size_t size = 123;
+    CHECK(s.get_object(s.ctx, id, &data, &size) == VS_ERR_NOT_FOUND);
+    CHECK(data == NULL);
+    CHECK(size == 0);
+
+    /* second put of the same id is a no-op: first contents stay, no tmp leftovers */
+    CHECK(s.put_object(s.ctx, id, "hello", 5) == VS_OK);
+    CHECK(s.put_object(s.ctx, id, "world", 5) == VS_OK);
+    CHECK(count_entries(root, "tmp") == 0);
+    CHECK(s.get_object(s.ctx, id, &data, &size) == VS_OK);
+    CHECK(size == 5);
+    CHECK(data && memcmp(data, "hello", 5) == 0);
+    free(data);
+
+    /* two ids with the same prefix share one objects/<xx>/ folder */
+    const char* root2 = VS_TEST_DIR "/test_vs_local_get_object_prefix";
+    vs_storage s2;
+    char id_a[VS_HASH_HEX_LEN + 1];
+    char id_b[VS_HASH_HEX_LEN + 1];
+    make_id(id_a, "ab", '0');
+    make_id(id_b, "ab", '1');
+    if (open_fresh_repo(root2, &s2))
+    {
+        CHECK(s2.put_object(s2.ctx, id_a, "a", 1) == VS_OK);
+        CHECK(s2.put_object(s2.ctx, id_b, "b", 1) == VS_OK);
+        CHECK(count_entries(root2, "objects") == 3);    /* ab/, ab/<id_a>, ab/<id_b> */
+        CHECK(count_entries(root2, "objects/ab") == 2);
+        CHECK(s2.close(s2.ctx) == VS_OK);
+        remove_tree(root2);
+    }
+
+    /* bad arguments */
+    CHECK(s.get_object(NULL, id, &data, &size) == VS_ERR_INVALID);
+    CHECK(s.get_object(s.ctx, NULL, &data, &size) == VS_ERR_INVALID);
+    CHECK(s.get_object(s.ctx, "../x", &data, &size) == VS_ERR_INVALID);
+    CHECK(s.get_object(s.ctx, id, NULL, &size) == VS_ERR_INVALID);
+    CHECK(s.get_object(s.ctx, id, &data, NULL) == VS_ERR_INVALID);
+    CHECK(s.put_object(s.ctx, "../x", "hello", 5) == VS_ERR_INVALID);
+
+    CHECK(s.close(s.ctx) == VS_OK);
+    remove_tree(root);
+}
+
+static void test_vs_local_snapshots(void)
+{
+    const char* root = VS_TEST_DIR "/test_vs_local_snapshots";
+    vs_storage s;
+    if (!open_fresh_repo(root, &s))
+        return;
+
+    vs_str_list list;
+    void* data = NULL;
+    size_t size = 0;
+
+    /* empty repo lists nothing */
+    CHECK(s.list_snapshots(s.ctx, &list) == VS_OK);
+    CHECK(list.count == 0);
+    vs_str_list_free(&list);
+
+    /* put -> get round trip, file lands at snapshots/<id> */
+    CHECK(s.put_snapshot(s.ctx, "b", "snap-b", 6) == VS_OK);
+    CHECK(file_equals(root, "snapshots/b", "snap-b", 6));
+    CHECK(s.get_snapshot(s.ctx, "b", &data, &size) == VS_OK);
+    CHECK(size == 6);
+    CHECK(data && memcmp(data, "snap-b", 6) == 0);
+    free(data);
+
+    /* same id again is refused and the first contents survive */
+    CHECK(s.put_snapshot(s.ctx, "b", "other!", 6) == VS_ERR_INVALID);
+    CHECK(file_equals(root, "snapshots/b", "snap-b", 6));
+    CHECK(count_entries(root, "tmp") == 0);
+
+    /* empty snapshot is allowed */
+    CHECK(s.put_snapshot(s.ctx, "empty", NULL, 0) == VS_OK);
+    CHECK(s.get_snapshot(s.ctx, "empty", &data, &size) == VS_OK);
+    CHECK(size == 0);
+    free(data);
+
+    /* missing: NOT_FOUND with reset outputs */
+    data = (void*)1;
+    size = 123;
+    CHECK(s.get_snapshot(s.ctx, "nope", &data, &size) == VS_ERR_NOT_FOUND);
+    CHECK(data == NULL);
+    CHECK(size == 0);
+
+    /* list: sorted, files only, junk names skipped */
+    CHECK(s.put_snapshot(s.ctx, "c", "c", 1) == VS_OK);
+    CHECK(s.put_snapshot(s.ctx, "a", "a", 1) == VS_OK);
+    CHECK(make_file(root, "snapshots/junk.txt", 3));
+    CHECK(make_dir(root, "snapshots/sub"));
+    CHECK(make_file(root, "snapshots/sub/x", 1));
+    CHECK(s.list_snapshots(s.ctx, &list) == VS_OK);
+    CHECK(list.count == 4);
+    if (list.count == 4)
+    {
+        CHECK_STR_EQ(list.items[0], "a");
+        CHECK_STR_EQ(list.items[1], "b");
+        CHECK_STR_EQ(list.items[2], "c");
+        CHECK_STR_EQ(list.items[3], "empty");
+    }
+    vs_str_list_free(&list);
+
+    /* bad ids and arguments */
+    char long_id[34];
+    memset(long_id, 'a', 33);
+    long_id[33] = '\0';
+    CHECK(s.put_snapshot(s.ctx, "../x", "x", 1) == VS_ERR_INVALID);
+    CHECK(s.put_snapshot(s.ctx, "", "x", 1) == VS_ERR_INVALID);
+    CHECK(s.put_snapshot(s.ctx, long_id, "x", 1) == VS_ERR_INVALID);
+    CHECK(s.put_snapshot(s.ctx, "a2", NULL, 1) == VS_ERR_INVALID);
+    CHECK(s.put_snapshot(NULL, "a2", "x", 1) == VS_ERR_INVALID);
+    CHECK(s.get_snapshot(s.ctx, "../x", &data, &size) == VS_ERR_INVALID);
+    CHECK(s.get_snapshot(s.ctx, NULL, &data, &size) == VS_ERR_INVALID);
+    CHECK(s.list_snapshots(NULL, &list) == VS_ERR_INVALID);
+    CHECK(s.list_snapshots(s.ctx, NULL) == VS_ERR_INVALID);
+
+    CHECK(s.close(s.ctx) == VS_OK);
+    remove_tree(root);
+}
+
 int main(void)
 {
 #ifdef VS_LEAK_CHECK
@@ -859,6 +1273,12 @@ int main(void)
         TEST(test_vs_scan),
         TEST(test_vs_hash),
         TEST(test_vs_chunk_file),
+        TEST(test_vs_local_init),
+        TEST(test_vs_local_open),
+        TEST(test_vs_local_has_object),
+        TEST(test_vs_local_put_object),
+        TEST(test_vs_local_get_object),
+        TEST(test_vs_local_snapshots),
     };
     size_t len = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < len; ++i)

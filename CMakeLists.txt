@@ -29,6 +29,7 @@ add_library(vaultsync_core STATIC
     core/util.c
     core/scanner.c
     core/hash.c
+    core/storage_local.c
 )
 target_include_directories(vaultsync_core PUBLIC 
     core/include

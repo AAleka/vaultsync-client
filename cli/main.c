@@ -8,12 +8,14 @@
 #include <vaultsync/vaultsync.h>
 #include "scanner.h"
 #include "hash.h"
+#include "storage.h"
 
 static void print_help(void);
 static int cmd_scan(const char* dir);
 
 static int print_chunk(void* user, const void* data, size_t n);
 static int cmd_hash(const char* path);
+static int cmd_init_local(const char* path);
 
 int main(int argc, char** argv)
 {
@@ -54,12 +56,29 @@ int main(int argc, char** argv)
 
             return cmd_hash(argv[2]);
         }
+        else if (strcmp(argv[1], "init") == 0)
+        {
+            if (argc == 2)
+            {
+                fprintf(stderr, "missing argument <path> for 'init'\n");
+                print_help();
+                return 1;
+            }
+
+            return cmd_init_local(argv[2]);
+        }
         else
         {
             fprintf(stderr, "invalid argument '%s'\n", argv[1]);
             print_help();
             return 1;
         }
+    }
+    else
+    {
+        fprintf(stderr, "missing arguments\n");
+        print_help();
+        return 1;
     }
 
     return 0;
@@ -74,7 +93,8 @@ static void print_help(void)
         "    --help    / -h - prints this help message\n"
         "    --version / -v - prints the application version\n"
         "      scan <dir>   - scans contents of a given directory\n"
-        "      hash <file>  - prints index, size and hash of each 1 MiB chunk\n";
+        "      hash <file>  - prints index, size and hash of each 1 MiB chunk\n"
+        "      init <path>  - initialize a local repository\n";
     
     printf("%s\n", help_msg);
 }
@@ -180,6 +200,20 @@ static int cmd_hash(const char* path)
 
     if (chunk_counter == 0)
         printf("(empty file, 0 chunks)\n");
+
+    return 0;
+}
+
+static int cmd_init_local(const char* path)
+{
+    int rc = VS_OK;
+
+    rc = vs_local_init(path);
+    if (rc != VS_OK)
+    {
+        fprintf(stderr, "init failed: %s\n", vs_strerr(rc));
+        return 1;
+    }
 
     return 0;
 }
