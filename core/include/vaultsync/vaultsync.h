@@ -23,14 +23,14 @@ typedef struct vs_str_list
     size_t count;
     size_t capacity;
     char** items;
-} vs_str_list;
+} vs_str_list_t;
 
 const char* vs_version(void);
 const char* vs_strerr(int err);
 
-void vs_str_list_init(vs_str_list* list);
-int vs_str_list_push(vs_str_list* list, const char *s);
-void vs_str_list_free(vs_str_list* list);
+void vs_str_list_init(vs_str_list_t* list);
+int vs_str_list_push(vs_str_list_t* list, const char *s);
+void vs_str_list_free(vs_str_list_t* list);
 
 #ifdef __cplusplus
 }

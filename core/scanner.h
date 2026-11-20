@@ -14,20 +14,20 @@ typedef struct vs_file_entry
     uint64_t size;
     uint64_t mtime;
     int      is_dir;
-} vs_file_entry;
+} vs_file_entry_t;
 
 typedef struct vs_file_list
 {
     size_t         count;
     size_t         capacity;
-    vs_file_entry* items;
-} vs_file_list;
+    vs_file_entry_t* items;
+} vs_file_list_t;
 
-void vs_file_list_init(vs_file_list* list);
-int vs_file_list_push(vs_file_list* list, const vs_file_entry *f);
-void vs_file_list_free(vs_file_list* list);
+void vs_file_list_init(vs_file_list_t* list);
+int vs_file_list_push(vs_file_list_t* list, const vs_file_entry_t *f);
+void vs_file_list_free(vs_file_list_t* list);
 
-int vs_scan(const char* root, vs_file_list* out);
+int vs_scan(const char* root, vs_file_list_t* out);
 
 #ifdef __cplusplus
 }

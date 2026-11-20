@@ -88,7 +88,7 @@ static void test_strerr(void)
 
 static void test_vs_str_list_init(void)
 {
-    vs_str_list list;
+    vs_str_list_t list;
     vs_str_list_init(&list);
 
     CHECK(list.count == 0);
@@ -102,7 +102,7 @@ static void test_vs_str_list_init(void)
 
 static void test_vs_str_list_push_basic(void)
 {
-    vs_str_list list;
+    vs_str_list_t list;
     vs_str_list_init(&list);
 
     const char* a = "aa";
@@ -124,7 +124,7 @@ static void test_vs_str_list_push_basic(void)
 
 static void test_vs_str_list_push_copies(void)
 {
-    vs_str_list list;
+    vs_str_list_t list;
     vs_str_list_init(&list);
 
     char buf[] = "abc";
@@ -139,7 +139,7 @@ static void test_vs_str_list_push_copies(void)
 
 static void test_vs_str_list_growth(void)
 {
-    vs_str_list list;
+    vs_str_list_t list;
     vs_str_list_init(&list);
 
     const char* a = "aa";
@@ -174,7 +174,7 @@ static void test_vs_str_list_growth(void)
 
 static void test_vs_str_list_many(void)
 {    
-    vs_str_list list;
+    vs_str_list_t list;
     vs_str_list_init(&list);
 
     const int num_files = 100000;
@@ -197,7 +197,7 @@ static void test_vs_str_list_many(void)
 
 static void test_vs_str_list_invalid(void)
 {
-    vs_str_list list;
+    vs_str_list_t list;
     vs_str_list_init(&list);
 
     CHECK(vs_str_list_push(NULL, "x") == VS_ERR_INVALID);
@@ -211,7 +211,7 @@ static void test_vs_str_list_invalid(void)
 
 static void test_vs_str_list_free(void)
 {
-    vs_str_list list;
+    vs_str_list_t list;
     vs_str_list_init(&list);
 
     const char* a = "aa";
@@ -251,7 +251,7 @@ static void test_vs_str_list_free(void)
 
 static void test_vs_str_list_empty_string(void)
 {
-    vs_str_list list;
+    vs_str_list_t list;
     vs_str_list_init(&list);
 
     const char* a = "";
@@ -403,7 +403,7 @@ static void test_vs_hex(void)
 
 static void test_vs_file_list_init(void)
 {
-    vs_file_list list;
+    vs_file_list_t list;
     vs_file_list_init(&list);
 
     CHECK(list.count == 0);
@@ -417,14 +417,14 @@ static void test_vs_file_list_init(void)
 
 static void test_vs_file_list_push(void)
 {
-    vs_file_list list;
+    vs_file_list_t list;
     vs_file_list_init(&list);
 
     const int num_entries = 100000;
     
     for (int i = 0; i < num_entries; ++i)
     {
-        vs_file_entry f;
+        vs_file_entry_t f;
         char rel_path[64];
         if (i % 3 == 0)
         {
@@ -461,11 +461,11 @@ static void test_vs_file_list_push(void)
 
 static void test_vs_file_list_free(void)
 {
-    vs_file_list list;
+    vs_file_list_t list;
     vs_file_list_init(&list);
 
-    vs_file_entry f = {"/test/test.txt", 5435345, 3123123213, 0};
-    vs_file_entry d = {"/test/tests/", 432423445, 3331221313, 1};
+    vs_file_entry_t f = {"/test/test.txt", 5435345, 3123123213, 0};
+    vs_file_entry_t d = {"/test/tests/", 432423445, 3331221313, 1};
 
     CHECK(vs_file_list_push(&list, &f) == VS_OK);
     CHECK(vs_file_list_push(&list, &d) == VS_OK);
@@ -532,7 +532,7 @@ static int make_file(const char* root, const char* rel, unsigned long size)
 /* Sorted scan walked backwards gives children before parents. */
 static void remove_tree(const char* root)
 {
-    vs_file_list list;
+    vs_file_list_t list;
     if (vs_scan(root, &list) != VS_OK)
         return;
 
@@ -580,7 +580,7 @@ static void test_vs_scan(void)
     CHECK(make_file(root, "a.txt", 2));
     CHECK(make_file(root, UNI_DIR "/" UNI_FILE, 5));
 
-    const vs_file_entry expected[] = {
+    const vs_file_entry_t expected[] = {
         { "a.txt",                  2, 0, 0 },
         { "b.txt",                  1, 0, 0 },
         { "empty",                  0, 0, 1 },
@@ -594,7 +594,7 @@ static void test_vs_scan(void)
     };
     const size_t n = sizeof(expected) / sizeof(expected[0]);
 
-    vs_file_list list;
+    vs_file_list_t list;
     CHECK(vs_scan(root, &list) == VS_OK);
     CHECK(list.count == n);
     for (size_t i = 0; i < n && i < list.count; ++i)
@@ -847,7 +847,7 @@ static int file_equals(const char* root, const char* rel, const void* data, size
 static size_t count_entries(const char* root, const char* rel)
 {
     char* path = NULL;
-    vs_file_list list;
+    vs_file_list_t list;
     size_t count = (size_t)-1;
 
     if (vs_path_join(root, rel, &path) == VS_OK && vs_scan(path, &list) == VS_OK)
@@ -901,7 +901,7 @@ static void test_vs_local_init(void)
 static void test_vs_local_open(void)
 {
     const char* root = VS_TEST_DIR "/test_vs_local_open";
-    vs_storage s;
+    vs_storage_t s;
 
     remove_tree(root);
     CHECK(make_dir(VS_TEST_DIR, ""));
@@ -956,7 +956,7 @@ static void test_vs_local_open(void)
 static void test_vs_local_has_object(void)
 {
     const char* root = VS_TEST_DIR "/test_vs_local_has_object";
-    vs_storage s;
+    vs_storage_t s;
     int exists = -1;
 
     remove_tree(root);
@@ -1026,7 +1026,7 @@ static void test_vs_local_has_object(void)
 static void test_vs_local_put_object(void)
 {
     const char* root = VS_TEST_DIR "/test_vs_local_put_object";
-    vs_storage s;
+    vs_storage_t s;
     int exists = -1;
 
     remove_tree(root);
@@ -1079,7 +1079,7 @@ static void test_vs_local_put_object(void)
 }
 
 /* Fresh repo at root, opened into s. 0 if anything failed (already CHECKed). */
-static int open_fresh_repo(const char* root, vs_storage* s)
+static int open_fresh_repo(const char* root, vs_storage_t* s)
 {
     remove_tree(root);
     CHECK(make_dir(VS_TEST_DIR, ""));
@@ -1106,7 +1106,7 @@ static void make_id(char out[VS_HASH_HEX_LEN + 1], const char* prefix, char fill
 static void test_vs_local_get_object(void)
 {
     const char* root = VS_TEST_DIR "/test_vs_local_get_object";
-    vs_storage s;
+    vs_storage_t s;
     if (!open_fresh_repo(root, &s))
         return;
 
@@ -1131,7 +1131,7 @@ static void test_vs_local_get_object(void)
 
     /* two ids with the same prefix share one objects/<xx>/ folder */
     const char* root2 = VS_TEST_DIR "/test_vs_local_get_object_prefix";
-    vs_storage s2;
+    vs_storage_t s2;
     char id_a[VS_HASH_HEX_LEN + 1];
     char id_b[VS_HASH_HEX_LEN + 1];
     make_id(id_a, "ab", '0');
@@ -1161,11 +1161,11 @@ static void test_vs_local_get_object(void)
 static void test_vs_local_snapshots(void)
 {
     const char* root = VS_TEST_DIR "/test_vs_local_snapshots";
-    vs_storage s;
+    vs_storage_t s;
     if (!open_fresh_repo(root, &s))
         return;
 
-    vs_str_list list;
+    vs_str_list_t list;
     void* data = NULL;
     size_t size = 0;
 
