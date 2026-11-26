@@ -51,9 +51,14 @@ target_include_directories(vaultsync_tests PRIVATE
 target_compile_definitions(vaultsync_tests PRIVATE
     VS_TEST_DIR="${CMAKE_BINARY_DIR}/tests"
 )
-add_test(NAME unit COMMAND
-    vaultsync_tests
-)
+# Register every TEST(...) entry from test_main.c as its own ctest test, so
+# ctest reports pass/fail per test and `ctest -R <name>` runs just one.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS tests/test_main.c)
+file(STRINGS tests/test_main.c VS_TEST_LINES REGEX "^[ \t]*TEST\\(test_[A-Za-z0-9_]+\\)")
+foreach(line ${VS_TEST_LINES})
+    string(REGEX MATCH "test_[A-Za-z0-9_]+" name "${line}")
+    add_test(NAME ${name} COMMAND vaultsync_tests ${name})
+endforeach()
 
 # CLI
 add_executable(vaultsync_cli 

@@ -25,7 +25,7 @@ char* vs_strdup(const char* s)
     return copy;
 }
 
-void vs_str_list_init(vs_str_list* list)
+void vs_str_list_init(vs_str_list_t* list)
 {
     if (!list)
         return;
@@ -33,7 +33,7 @@ void vs_str_list_init(vs_str_list* list)
     memset(list, 0, sizeof(*list));
 }
 
-int vs_str_list_push(vs_str_list* list, const char *s)
+int vs_str_list_push(vs_str_list_t* list, const char *s)
 {
     if (!list || !s)
         return VS_ERR_INVALID;
@@ -59,7 +59,7 @@ int vs_str_list_push(vs_str_list* list, const char *s)
     return VS_OK;
 }
 
-void vs_str_list_free(vs_str_list* list)
+void vs_str_list_free(vs_str_list_t* list)
 {
     if (!list)
         return;

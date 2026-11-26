@@ -14,12 +14,12 @@ typedef struct vs_storage {
     int (*get_object)(void* ctx, const char* id, void** data, size_t* size);
     int (*put_snapshot)(void* ctx, const char* id, const void* data, size_t size);
     int (*get_snapshot)(void* ctx, const char* id, void** data, size_t* size);
-    int (*list_snapshots)(void* ctx, vs_str_list* out);
+    int (*list_snapshots)(void* ctx, vs_str_list_t* out);
     int (*close)(void* ctx);
-} vs_storage;
+} vs_storage_t;
 
 int vs_local_init(const char* repo_path);
-int vs_local_open(const char* repo_path, vs_storage* out);
+int vs_local_open(const char* repo_path, vs_storage_t* out);
 
 #ifdef __cplusplus
 }

@@ -18,7 +18,7 @@ typedef struct local_ctx {
     char* snapshots_dir;
     char* tmp_dir;
     char* repo_path;
-} local_ctx;
+} local_ctx_t;
 
 static int create_dir(const char* path)
 {
@@ -350,7 +350,7 @@ cleanup:
     return rc;
 }
 
-static int object_path(const local_ctx* c, const char* id, char** out)
+static int object_path(const local_ctx_t* c, const char* id, char** out)
 {
     if (!c || !id || !out)
         return VS_ERR_INVALID;
@@ -374,7 +374,7 @@ static int object_path(const local_ctx* c, const char* id, char** out)
     return rc;
 }
 
-static int snapshot_path(const local_ctx* c, const char* id, char** out)
+static int snapshot_path(const local_ctx_t* c, const char* id, char** out)
 {
     if (!c || !id || !out)
         return VS_ERR_INVALID;
@@ -396,7 +396,7 @@ static int vs_local_has_object(void* ctx, const char* id, int* exists)
         return VS_ERR_INVALID;
 
     int rc = VS_OK;
-    local_ctx* c = ctx;
+    local_ctx_t* c = ctx;
     char* path = NULL;
     wchar_t* path_wide = NULL;
     DWORD attrs = 0;
@@ -450,7 +450,7 @@ static int vs_local_put_object(void* ctx, const char* id, const void* data, size
     int rc = VS_OK;
     char* path = NULL;
     int exists = 0;
-    local_ctx* c = ctx;
+    local_ctx_t* c = ctx;
 
     rc = validate_object_id(id);
     if (rc != VS_OK)
@@ -497,7 +497,7 @@ static int vs_local_get_object(void* ctx, const char* id, void** data, size_t* s
 
     int rc = VS_OK;
     char* path = NULL;
-    local_ctx* c = ctx;
+    local_ctx_t* c = ctx;
 
     rc = object_path(c, id, &path);
     if (rc != VS_OK)
@@ -516,7 +516,7 @@ static int vs_local_put_snapshot(void* ctx, const char* id, const void* data, si
     
     int rc = VS_OK;
     char* path = NULL;
-    local_ctx* c = ctx;
+    local_ctx_t* c = ctx;
 
     rc = snapshot_path(c, id, &path);
     if (rc != VS_OK)
@@ -538,7 +538,7 @@ static int vs_local_get_snapshot(void* ctx, const char* id, void** data, size_t*
 
     int rc = VS_OK;
     char* path = NULL;
-    local_ctx* c = ctx;
+    local_ctx_t* c = ctx;
 
     rc = snapshot_path(c, id, &path);
     if (rc != VS_OK)
@@ -550,14 +550,14 @@ static int vs_local_get_snapshot(void* ctx, const char* id, void** data, size_t*
     return rc;
 }
 
-static int vs_local_list_snapshots(void* ctx, vs_str_list* out)
+static int vs_local_list_snapshots(void* ctx, vs_str_list_t* out)
 {
     if (!ctx || !out)
         return VS_ERR_INVALID;
 
     int rc = VS_OK;
-    local_ctx* c = ctx;
-    vs_file_list files = {0};
+    local_ctx_t* c = ctx;
+    vs_file_list_t files = {0};
 
     vs_str_list_init(out);
 
@@ -567,7 +567,7 @@ static int vs_local_list_snapshots(void* ctx, vs_str_list* out)
 
     for (size_t i = 0; i < files.count; ++i)
     {
-        vs_file_entry entry = files.items[i];
+        vs_file_entry_t entry = files.items[i];
         if (entry.is_dir || validate_snapshot_id(entry.rel_path) != VS_OK)
             continue;
         
@@ -588,7 +588,7 @@ static int vs_local_close(void* ctx)
     if (!ctx)
         return VS_OK;
     
-    local_ctx* c = ctx;
+    local_ctx_t* c = ctx;
 
     free(c->objects_dir);
     free(c->snapshots_dir);
@@ -599,7 +599,7 @@ static int vs_local_close(void* ctx)
     return VS_OK;
 }
 
-int vs_local_open(const char* repo_path, vs_storage* out)
+int vs_local_open(const char* repo_path, vs_storage_t* out)
 {
     if (!repo_path || out == NULL)
         return VS_ERR_INVALID;
@@ -612,7 +612,7 @@ int vs_local_open(const char* repo_path, vs_storage* out)
     size_t size = 0;
     const char* subdir_names[] = {"objects", "snapshots", "tmp"};
     char* subdirs[3] = {NULL};
-    local_ctx* c = NULL;
+    local_ctx_t* c = NULL;
 
     rc = vs_path_join(repo_path, "repository.meta", &path);
     if (rc != VS_OK)

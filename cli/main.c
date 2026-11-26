@@ -133,7 +133,7 @@ static void get_size(const uint64_t size, char* buf, size_t buf_size)
 
 static int cmd_scan(const char* dir)
 {
-    vs_file_list list;
+    vs_file_list_t list;
     int rc = vs_scan(dir, &list);
     if (rc != VS_OK)
     {

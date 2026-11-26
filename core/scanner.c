@@ -8,7 +8,7 @@
 #include "scanner.h"
 #include "util.h"
 
-void vs_file_list_init(vs_file_list* list)
+void vs_file_list_init(vs_file_list_t* list)
 {
     if (!list)
         return;
@@ -16,7 +16,7 @@ void vs_file_list_init(vs_file_list* list)
     memset(list, 0, sizeof(*list));
 }
 
-int vs_file_list_push(vs_file_list* list, const vs_file_entry *f)
+int vs_file_list_push(vs_file_list_t* list, const vs_file_entry_t *f)
 {
     if (!list || !f || !f->rel_path)
         return VS_ERR_INVALID;
@@ -25,7 +25,7 @@ int vs_file_list_push(vs_file_list* list, const vs_file_entry *f)
     {
         size_t temp_capacity = list->capacity ? list->capacity * 2 : 8;
 
-        vs_file_entry* temp_items = realloc(list->items, temp_capacity * sizeof(*list->items));
+        vs_file_entry_t* temp_items = realloc(list->items, temp_capacity * sizeof(*list->items));
         if (!temp_items)
             return VS_ERR_NOMEM;
         
@@ -44,7 +44,7 @@ int vs_file_list_push(vs_file_list* list, const vs_file_entry *f)
     return VS_OK;
 }
 
-void vs_file_list_free(vs_file_list* list)
+void vs_file_list_free(vs_file_list_t* list)
 {
     if (!list)
         return;
@@ -60,14 +60,14 @@ void vs_file_list_free(vs_file_list* list)
 
 static int compare_entries(const void* a, const void* b)
 {
-    const vs_file_entry* ea = a;
-    const vs_file_entry* eb = b;
+    const vs_file_entry_t* ea = a;
+    const vs_file_entry_t* eb = b;
     return strcmp(ea->rel_path, eb->rel_path);
 }
 
-static int scan_dir(const char* abs, const char* rel, vs_file_list* list);
+static int scan_dir(const char* abs, const char* rel, vs_file_list_t* list);
 
-static int scan_entry(const char* abs, const char* rel, const WIN32_FIND_DATAW* fd, vs_file_list* list)
+static int scan_entry(const char* abs, const char* rel, const WIN32_FIND_DATAW* fd, vs_file_list_t* list)
 {
     if (wcscmp(fd->cFileName, L".") == 0 || wcscmp(fd->cFileName, L"..") == 0)
         return VS_OK;
@@ -91,7 +91,7 @@ static int scan_entry(const char* abs, const char* rel, const WIN32_FIND_DATAW* 
     if (rc != VS_OK)
         goto cleanup;
 
-    vs_file_entry e;
+    vs_file_entry_t e;
     e.rel_path = child_rel;
     e.is_dir   = (fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
     e.size     = e.is_dir ? 0 : (uint64_t)fd->nFileSizeHigh << 32 | fd->nFileSizeLow;
@@ -109,7 +109,7 @@ cleanup:
     return rc;
 }
 
-static int scan_dir(const char* abs, const char* rel, vs_file_list* list)
+static int scan_dir(const char* abs, const char* rel, vs_file_list_t* list)
 {
     char* pattern = NULL;
     wchar_t* pattern_wide = NULL;
@@ -155,7 +155,7 @@ cleanup:
     return rc;
 }
 
-int vs_scan(const char* root, vs_file_list* out)
+int vs_scan(const char* root, vs_file_list_t* out)
 {
     if (!root || !*root || !out)
         return VS_ERR_INVALID;

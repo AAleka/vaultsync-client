@@ -1,0 +1,14 @@
+# Used by CodeChecker (clang-tidy analyzer). Only HIGH/CRITICAL findings fail
+# the check (see scripts/analyze.py); this list just picks what gets looked at.
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-reserved-identifier,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+WarningsAsErrors: ''
+HeaderFilterRegex: '(core|cli)/'
