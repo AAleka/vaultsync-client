@@ -11,4 +11,4 @@ Checks: >
   -cert-dcl51-cpp,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
 WarningsAsErrors: ''
-HeaderFilterRegex: '(core|cli|tests)/'
+HeaderFilterRegex: '(core|cli)/'

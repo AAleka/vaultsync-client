@@ -25,9 +25,10 @@ BUILD = ROOT / "build" / "analyze"
 REPORTS = BUILD / "reports"
 VENV = ROOT / "build" / "analyze-venv"
 FAIL_SEVERITIES = {"HIGH", "CRITICAL"}
-# CodeChecker's skipfile doesn't reliably match Windows paths, so third_party
-# is also filtered out of the results below.
-SKIP = re.compile(r"[\\/]third_party[\\/]")
+# Only product code is analyzed: third_party isn't ours and tests/ is test-only.
+# CodeChecker's skipfile doesn't reliably match Windows paths, so these are
+# also filtered out of the results below.
+SKIP = re.compile(r"[\\/](third_party|tests)[\\/]")
 
 
 def run(*cmd, check=True):
@@ -60,7 +61,7 @@ def main():
     run("cmake", "--preset", "analyze")
 
     skipfile = BUILD / "skipfile"
-    skipfile.write_text("-*/third_party/*\n")
+    skipfile.write_text("-*/third_party/*\n-*/tests/*\n")
 
     # analyze exits non-zero whenever it reports anything, so don't check it;
     # a missing report directory is the real failure.
