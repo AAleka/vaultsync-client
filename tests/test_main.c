@@ -1235,7 +1235,7 @@ static void test_vs_local_snapshots(void)
     remove_tree(root);
 }
 
-int main(void)
+int main(int argc, char** argv)
 {
 #ifdef VS_LEAK_CHECK
     /* Send CRT reports (leaks, heap corruption, abort) to stderr instead of
@@ -1280,11 +1280,23 @@ int main(void)
         TEST(test_vs_local_get_object),
         TEST(test_vs_local_snapshots),
     };
+    /* No argument: run every test. One argument: run only the test with that
+       name (ctest registers each test this way, see CMakeLists.txt). */
+    const char* only = argc > 1 ? argv[1] : NULL;
+    int ran = 0;
     size_t len = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < len; ++i)
     {
+        if (only && strcmp(only, tests[i].name) != 0)
+            continue;
         printf("TEST %s\n", tests[i].name);
         tests[i].func();
+        ran++;
+    }
+    if (ran == 0)
+    {
+        fprintf(stderr, "no test named %s\n", only);
+        return 1;
     }
 
 #ifdef VS_LEAK_CHECK

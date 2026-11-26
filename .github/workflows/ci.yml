@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.preset }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # debug = CRT leak check, asan = AddressSanitizer, release = optimized
+        preset: [debug, asan, release]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      - run: ctest --preset ${{ matrix.preset }}
+
+  analyze:
+    name: static analysis (CodeChecker)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # LLVM is preinstalled on windows-latest; put it ahead of anything else.
+      - run: echo "C:\Program Files\LLVM\bin" | Out-File -Append $env:GITHUB_PATH
+      - run: python scripts/analyze.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codechecker-report
+          path: build/analyze/html
