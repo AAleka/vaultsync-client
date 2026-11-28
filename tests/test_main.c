@@ -1596,6 +1596,59 @@ static void test_vs_manifest_parse_corrupt(void)
     }
 }
 
+/* Damage one byte at a time. Any result is fine (a flipped letter in a path
+   is still valid), but parse must never crash, leak, or hand back a manifest
+   on error. Run under ASan to catch out-of-bounds reads. */
+static void test_vs_manifest_parse_flip(void)
+{
+    const char* valid =
+        "vaultsync-manifest 1\n"
+        "source C:/src\n"
+        "created 20261126T205617Z\n"
+        "dir 0 0 d\n"
+        "file 1500000 1 2 d/a b.jpg\n"
+        "chunk af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\n"
+        "chunk 2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213\n"
+        "file 0 2 0 empty.txt\n"
+        "end 3\n";
+
+    const unsigned char masks[] = { 0x01, 0x20, 0x80 };
+    size_t len = strlen(valid);
+    char buf[512];
+
+    CHECK(len <= sizeof(buf));
+    if (len > sizeof(buf))
+        return;
+
+    size_t ok = 0, corrupt = 0;
+    for (size_t m = 0; m < sizeof(masks); ++m)
+    {
+        for (size_t i = 0; i < len; ++i)
+        {
+            memcpy(buf, valid, len);
+            buf[i] ^= masks[m];
+
+            vs_manifest_t* man = NULL;
+            int rc = vs_manifest_parse(buf, len, &man);
+            if (rc == VS_OK)
+            {
+                CHECK(man != NULL);
+                ok++;
+            }
+            else
+            {
+                CHECK(rc == VS_ERR_CORRUPT);
+                CHECK(man == NULL);
+                corrupt++;
+            }
+            vs_manifest_free(man);
+        }
+    }
+
+    /* most single-byte damage must be detected */
+    CHECK(corrupt > ok);
+}
+
 int main(int argc, char** argv)
 {
 #ifdef VS_CRT_DEBUG
@@ -1650,6 +1703,7 @@ int main(int argc, char** argv)
         TEST(test_manifest_parse),
         TEST(test_vs_manifest_roundtrip),
         TEST(test_vs_manifest_parse_corrupt),
+        TEST(test_vs_manifest_parse_flip),
     };
     /* No argument: run every test. One argument: run only the test with that
        name (ctest registers each test this way, see CMakeLists.txt). */
@@ -1661,6 +1715,7 @@ int main(int argc, char** argv)
         if (only && strcmp(only, tests[i].name) != 0)
             continue;
         printf("TEST %s\n", tests[i].name);
+        ran++;
 #ifdef VS_LEAK_CHECK
         _CrtMemState mem_before, mem_after, mem_diff;
         _CrtMemCheckpoint(&mem_before);
