@@ -80,8 +80,6 @@ int main(int argc, char** argv)
         print_help();
         return 1;
     }
-
-    return 0;
 }
 
 static void print_help(void)

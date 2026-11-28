@@ -6,6 +6,7 @@
 
 #include <vaultsync/vaultsync.h>
 #include "util.h"
+#include "hash.h"
 
 char* vs_strdup(const char* s)
 {
@@ -182,4 +183,38 @@ int vs_map_win_error(unsigned long err)
     default:
         return VS_ERR_IO;       /* access denied, sharing violation, disk errors, ... */
     }
+}
+
+int validate_object_id(const char* id)
+{
+    if (!id || strlen(id) != VS_HASH_HEX_LEN)
+        return VS_ERR_INVALID;
+    
+    while (*id != '\0')
+    {
+        if (!((*id >= '0' && *id <= '9') ||
+            (*id >= 'a' && *id <= 'f')))
+            return VS_ERR_INVALID;
+        id++;
+    }
+
+    return VS_OK;
+}
+
+int validate_snapshot_id(const char* id)
+{
+    if (!id || strlen(id) > 32 || strlen(id) < 1)
+        return VS_ERR_INVALID;
+    
+    while (*id != '\0')
+    {
+        if (!((*id >= '0' && *id <= '9') ||
+            (*id >= 'a' && *id <= 'z') ||
+            (*id >= 'A' && *id <= 'Z')))
+            return VS_ERR_INVALID;
+
+        id++;
+    }
+
+    return VS_OK;
 }
