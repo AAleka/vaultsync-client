@@ -48,40 +48,6 @@ cleanup:
     return rc;
 }
 
-static int validate_object_id(const char* id)
-{
-    if (!id || strlen(id) != VS_HASH_HEX_LEN)
-        return VS_ERR_INVALID;
-    
-    while (*id != '\0')
-    {
-        if (!((*id >= '0' && *id <= '9') ||
-            (*id >= 'a' && *id <= 'f')))
-            return VS_ERR_INVALID;
-        id++;
-    }
-
-    return VS_OK;
-}
-
-static int validate_snapshot_id(const char* id)
-{
-    if (!id || strlen(id) > 32 || strlen(id) < 1)
-        return VS_ERR_INVALID;
-    
-    while (*id != '\0')
-    {
-        if (!((*id >= '0' && *id <= '9') ||
-            (*id >= 'a' && *id <= 'z') ||
-            (*id >= 'A' && *id <= 'Z')))
-            return VS_ERR_INVALID;
-
-        id++;
-    }
-
-    return VS_OK;
-}
-
 static void rand_str(char* dest, size_t len)
 {
     static int seeded = 0;

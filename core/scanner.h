@@ -7,19 +7,24 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+/*
+* uint64_t size;
+* uint64_t mtime;
+* int      is_dir;
+* char*    rel_path;
+*/
 typedef struct vs_file_entry
 {
-    char*    rel_path;  /* UTF-8, '/' separators, relative to root, owned (malloc'd) */
     uint64_t size;
     uint64_t mtime;
     int      is_dir;
+    char*    rel_path;  /* UTF-8, '/' separators, relative to root, owned (malloc'd) */
 } vs_file_entry_t;
 
 typedef struct vs_file_list
 {
-    size_t         count;
-    size_t         capacity;
+    size_t           count;
+    size_t           capacity;
     vs_file_entry_t* items;
 } vs_file_list_t;
 

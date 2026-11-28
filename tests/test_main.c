@@ -10,11 +10,17 @@
 #include "scanner.h"
 #include "hash.h"
 #include "storage.h"
+#include "manifest.h"
 
 /* MSVC Debug builds only: the CRT debug heap tracks every allocation. */
 #if defined(_MSC_VER) && defined(_DEBUG)
 #include <crtdbg.h>
+#define VS_CRT_DEBUG 1
+/* ASan replaces the allocator, so the debug heap sees nothing: configure
+   with -DVS_ASAN=OFF to get leak checks. */
+#ifndef __SANITIZE_ADDRESS__
 #define VS_LEAK_CHECK 1
+#endif
 #endif
 
 static int g_failures = 0;
@@ -464,8 +470,8 @@ static void test_vs_file_list_free(void)
     vs_file_list_t list;
     vs_file_list_init(&list);
 
-    vs_file_entry_t f = {"/test/test.txt", 5435345, 3123123213, 0};
-    vs_file_entry_t d = {"/test/tests/", 432423445, 3331221313, 1};
+    vs_file_entry_t f = {5435345, 3123123213, 0, "/test/test.txt"};
+    vs_file_entry_t d = {432423445, 3331221313, 1, "/test/tests/"};
 
     CHECK(vs_file_list_push(&list, &f) == VS_OK);
     CHECK(vs_file_list_push(&list, &d) == VS_OK);
@@ -581,16 +587,16 @@ static void test_vs_scan(void)
     CHECK(make_file(root, UNI_DIR "/" UNI_FILE, 5));
 
     const vs_file_entry_t expected[] = {
-        { "a.txt",                  2, 0, 0 },
-        { "b.txt",                  1, 0, 0 },
-        { "empty",                  0, 0, 1 },
-        { "nested",                 0, 0, 1 },
-        { "nested/a",               0, 0, 1 },
-        { "nested/a/b",             0, 0, 1 },
-        { "nested/a/b/c.txt",       3, 0, 0 },
-        { "zero.txt",               0, 0, 0 },
-        { UNI_DIR,                  0, 0, 1 },
-        { UNI_DIR "/" UNI_FILE,     5, 0, 0 },
+        { 2, 0, 0, "a.txt" },
+        { 1, 0, 0, "b.txt" },
+        { 0, 0, 1, "empty" },
+        { 0, 0, 1, "nested" },
+        { 0, 0, 1, "nested/a" },
+        { 0, 0, 1, "nested/a/b" },
+        { 3, 0, 0, "nested/a/b/c.txt" },
+        { 0, 0, 0, "zero.txt" },
+        { 0, 0, 1, UNI_DIR },
+        { 5, 0, 0, UNI_DIR "/" UNI_FILE },
     };
     const size_t n = sizeof(expected) / sizeof(expected[0]);
 
@@ -1235,9 +1241,417 @@ static void test_vs_local_snapshots(void)
     remove_tree(root);
 }
 
+#define MAN_SOURCE  "C:/Users/me/Photos"
+#define MAN_CREATED "20261121T200945Z"
+
+static void test_vs_manifest_create(void)
+{
+    vs_manifest_t* man = NULL;
+
+    int rc = vs_manifest_create(MAN_SOURCE, MAN_CREATED, &man);
+    CHECK(rc == VS_OK);
+    if (rc != VS_OK)
+        return;
+
+    CHECK_STR_EQ(man->source, MAN_SOURCE);
+    CHECK_STR_EQ(man->created, MAN_CREATED);
+    CHECK(man->count == 0);
+    CHECK(man->capacity == 0);
+    CHECK(man->items == NULL);
+
+    vs_manifest_free(man);
+    vs_manifest_free(NULL);
+
+    /* invalid input: error, *out stays NULL */
+    man = NULL;
+    CHECK(vs_manifest_create(MAN_SOURCE, "2026", &man) == VS_ERR_INVALID);
+    CHECK(man == NULL);
+    CHECK(vs_manifest_create(MAN_SOURCE, MAN_CREATED "0", &man) == VS_ERR_INVALID);
+    CHECK(man == NULL);
+    CHECK(vs_manifest_create(NULL, MAN_CREATED, &man) == VS_ERR_INVALID);
+    CHECK(vs_manifest_create(MAN_SOURCE, NULL, &man) == VS_ERR_INVALID);
+    CHECK(vs_manifest_create(MAN_SOURCE, MAN_CREATED, NULL) == VS_ERR_INVALID);
+}
+
+static void test_vs_manifest_add_entry(void)
+{
+    vs_manifest_t* man = NULL;
+    if (vs_manifest_create(MAN_SOURCE, MAN_CREATED, &man) != VS_OK)
+    {
+        CHECK(0);
+        return;
+    }
+
+    /* manifest must keep its own copy of rel_path */
+    char path[64] = "Trips";
+    vs_file_entry_t d = {0, 111, 1, path};
+    CHECK(vs_manifest_add_entry(man, &d) == VS_OK);
+    snprintf(path, sizeof(path), "XXXXX");
+    CHECK_STR_EQ(man->items[0].info.rel_path, "Trips");
+
+    vs_file_entry_t f = {2097152, 222, 0, "Trips/a b.jpg"};
+    CHECK(vs_manifest_add_entry(man, &f) == VS_OK);
+
+    CHECK(man->count == 2);
+    CHECK(man->items[0].info.is_dir == 1);
+    CHECK(man->items[0].info.mtime == 111);
+    CHECK(man->items[1].info.is_dir == 0);
+    CHECK(man->items[1].info.size == 2097152);
+    CHECK(man->items[1].info.mtime == 222);
+    CHECK_STR_EQ(man->items[1].info.rel_path, "Trips/a b.jpg");
+    CHECK(man->items[1].chunk_count == 0);
+    CHECK(man->items[1].ids == NULL);
+
+    /* invalid paths */
+    vs_file_entry_t bad = {0, 0, 0, "a\nb"};
+    CHECK(vs_manifest_add_entry(man, &bad) == VS_ERR_INVALID);
+    bad.rel_path = "a\rb";
+    CHECK(vs_manifest_add_entry(man, &bad) == VS_ERR_INVALID);
+    bad.rel_path = "";
+    CHECK(vs_manifest_add_entry(man, &bad) == VS_ERR_INVALID);
+    bad.rel_path = NULL;
+    CHECK(vs_manifest_add_entry(man, &bad) == VS_ERR_INVALID);
+    CHECK(vs_manifest_add_entry(man, NULL) == VS_ERR_INVALID);
+    CHECK(vs_manifest_add_entry(NULL, &f) == VS_ERR_INVALID);
+    CHECK(man->count == 2);
+
+    /* growth */
+    for (int i = 0; i < 10000; ++i)
+    {
+        char p[32];
+        snprintf(p, sizeof(p), "file_%d", i);
+        vs_file_entry_t e = {(uint64_t)i, 0, 0, p};
+        CHECK(vs_manifest_add_entry(man, &e) == VS_OK);
+    }
+    CHECK(man->count == 10002);
+    CHECK_STR_EQ(man->items[10001].info.rel_path, "file_9999");
+    CHECK(man->items[10001].info.size == 9999);
+
+    vs_manifest_free(man);
+}
+
+static void test_vs_manifest_add_chunk(void)
+{
+    vs_manifest_t* man = NULL;
+    if (vs_manifest_create(MAN_SOURCE, MAN_CREATED, &man) != VS_OK)
+    {
+        CHECK(0);
+        return;
+    }
+
+    char id_a[VS_HASH_HEX_LEN + 1], id_b[VS_HASH_HEX_LEN + 1];
+    make_id(id_a, "9f", '1');
+    make_id(id_b, "41", '2');
+
+    /* no entry yet */
+    CHECK(vs_manifest_add_chunk(man, id_a) == VS_ERR_INVALID);
+
+    /* dirs have no chunks */
+    vs_file_entry_t d = {0, 0, 1, "Trips"};
+    CHECK(vs_manifest_add_entry(man, &d) == VS_OK);
+    CHECK(vs_manifest_add_chunk(man, id_a) == VS_ERR_INVALID);
+    CHECK(man->items[0].chunk_count == 0);
+
+    /* chunks go to the last entry, in order */
+    vs_file_entry_t f = {3 * VS_CHUNK_SIZE, 0, 0, "Trips/a.jpg"};
+    CHECK(vs_manifest_add_entry(man, &f) == VS_OK);
+    CHECK(vs_manifest_add_chunk(man, id_a) == VS_OK);
+    CHECK(vs_manifest_add_chunk(man, id_b) == VS_OK);
+    CHECK(vs_manifest_add_chunk(man, id_a) == VS_OK);
+    CHECK(man->items[1].chunk_count == 3);
+    CHECK_STR_EQ(man->items[1].ids[0], id_a);
+    CHECK_STR_EQ(man->items[1].ids[1], id_b);
+    CHECK_STR_EQ(man->items[1].ids[2], id_a);
+
+    /* invalid ids */
+    char bad[VS_HASH_HEX_LEN + 1];
+    make_id(bad, "AB", 'c');    /* uppercase */
+    CHECK(vs_manifest_add_chunk(man, bad) == VS_ERR_INVALID);
+    make_id(bad, "zz", 'c');    /* not hex */
+    CHECK(vs_manifest_add_chunk(man, bad) == VS_ERR_INVALID);
+    CHECK(vs_manifest_add_chunk(man, "abc") == VS_ERR_INVALID);
+    CHECK(vs_manifest_add_chunk(man, NULL) == VS_ERR_INVALID);
+    CHECK(vs_manifest_add_chunk(NULL, id_a) == VS_ERR_INVALID);
+    CHECK(man->items[1].chunk_count == 3);
+
+    /* growth */
+    vs_file_entry_t big = {100 * VS_CHUNK_SIZE, 0, 0, "big.bin"};
+    CHECK(vs_manifest_add_entry(man, &big) == VS_OK);
+    for (int i = 0; i < 100; ++i)
+        CHECK(vs_manifest_add_chunk(man, i % 2 ? id_a : id_b) == VS_OK);
+    CHECK(man->items[2].chunk_count == 100);
+    CHECK_STR_EQ(man->items[2].ids[0], id_b);
+    CHECK_STR_EQ(man->items[2].ids[99], id_a);
+
+    vs_manifest_free(man);
+}
+
+static void test_vs_manifest_serialize(void)
+{
+    const char* expected = 
+        "vaultsync-manifest 1\n"
+        "source C:/Users/me/Photos\n"
+        "created 20261126T205617Z\n"
+        "dir 5435345 342345 Holiday\n"
+        "file 1500000 534532 2 me.jpg\n"
+        "chunk af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\n"
+        "chunk 2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213\n"
+        "end 2\n";
+    
+    vs_manifest_t* man = NULL;
+    vs_file_entry_t dir = {5435345, 342345, 1, "Holiday"};
+    vs_file_entry_t file = {1500000, 534532, 0, "me.jpg"};
+
+    CHECK(vs_manifest_create("C:/Users/me/Photos", "20261126T205617Z", &man) == VS_OK);
+    if (!man)
+        return;
+
+    CHECK(vs_manifest_add_entry(man, &dir) == VS_OK);
+    CHECK(vs_manifest_add_entry(man, &file) == VS_OK);
+    CHECK(vs_manifest_add_chunk(man, "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262") == VS_OK);
+    CHECK(vs_manifest_add_chunk(man, "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213") == VS_OK);
+
+    void* data = NULL;
+    size_t size = 0;
+    CHECK(vs_manifest_serialize(man, &data, &size) == VS_OK);
+    CHECK(size == strlen(expected));
+    CHECK(memcmp(data, expected, size) == 0);
+
+    CHECK(vs_manifest_serialize(NULL, &data, &size) == VS_ERR_INVALID);
+    CHECK(vs_manifest_serialize(man, NULL, &size) == VS_ERR_INVALID);
+    CHECK(vs_manifest_serialize(man, &data, NULL) == VS_ERR_INVALID);
+
+    free(data);
+    vs_manifest_free(man);
+}
+
+static void test_manifest_parse(void)
+{
+    const char* serialized = 
+        "vaultsync-manifest 1\n"
+        "source C:/Users/me/Photos\n"
+        "created 20261126T205617Z\n"
+        "dir 5435345 342345 Holiday\n"
+        "file 1500000 534532 2 me.jpg\n"
+        "chunk af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\n"
+        "chunk 2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213\n"
+        "end 2\n";
+
+    vs_manifest_t* man = NULL;
+    int rc = vs_manifest_parse(serialized, strlen(serialized), &man);
+    CHECK(rc == VS_OK);
+    if (rc != VS_OK)
+        return;
+    
+    CHECK(man->count == 2);
+    CHECK_STR_EQ(man->created, "20261126T205617Z");
+    CHECK_STR_EQ(man->source, "C:/Users/me/Photos");
+    CHECK(man->items[0].info.is_dir == 1);
+    CHECK(man->items[0].info.size == 5435345);
+    CHECK(man->items[0].info.mtime == 342345);
+    CHECK_STR_EQ(man->items[0].info.rel_path, "Holiday");
+    CHECK(man->items[1].info.is_dir == 0);
+    CHECK(man->items[1].info.size == 1500000);
+    CHECK(man->items[1].info.mtime == 534532);
+    CHECK_STR_EQ(man->items[1].info.rel_path, "me.jpg");
+    CHECK(man->items[1].chunk_count == 2);
+    CHECK_STR_EQ(man->items[1].ids[0], 
+        "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262");
+    CHECK_STR_EQ(man->items[1].ids[1], 
+        "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213");
+
+    vs_manifest_free(man);
+    man = NULL;
+
+    CHECK(vs_manifest_parse(NULL, 1, &man) == VS_ERR_INVALID);
+    CHECK(vs_manifest_parse(serialized, 0, &man) == VS_ERR_CORRUPT);
+    CHECK(vs_manifest_parse(serialized, strlen(serialized), NULL) == VS_ERR_INVALID);
+}
+
+static void test_vs_manifest_roundtrip(void)
+{
+    const char* expected =
+        "vaultsync-manifest 1\n"
+        "source C:/Users/me/Photos\n"
+        "created 20261126T205617Z\n"
+        "dir 0 0 Holiday\n"
+        "file 1500000 534532 2 Holiday/me and you.jpg\n"
+        "chunk af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\n"
+        "chunk 2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213\n"
+        "file 0 534533 0 empty.txt\n"
+        "end 3\n";
+
+    vs_manifest_t* man = NULL;
+    vs_manifest_t* out = NULL;
+    void* data = NULL;
+    void* new_data = NULL;
+    size_t size = 0, new_size = 0;
+    vs_file_entry_t dir = {0, 0, 1, "Holiday"};
+    vs_file_entry_t file = {1500000, 534532, 0, "Holiday/me and you.jpg"};
+    vs_file_entry_t empty = {0, 534533, 0, "empty.txt"};
+
+    CHECK(vs_manifest_create("C:/Users/me/Photos", "20261126T205617Z", &man) == VS_OK);
+    if (!man)
+        return;
+
+    CHECK(vs_manifest_add_entry(man, &dir) == VS_OK);
+    CHECK(vs_manifest_add_entry(man, &file) == VS_OK);
+    CHECK(vs_manifest_add_chunk(man, "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262") == VS_OK);
+    CHECK(vs_manifest_add_chunk(man, "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213") == VS_OK);
+    CHECK(vs_manifest_add_entry(man, &empty) == VS_OK);
+
+    CHECK(vs_manifest_serialize(man, &data, &size) == VS_OK);
+    CHECK(size == strlen(expected));
+    CHECK(data && memcmp(data, expected, size) == 0);
+
+    /* serialize -> parse -> serialize gives identical bytes */
+    CHECK(vs_manifest_parse(data, size, &out) == VS_OK);
+    if (out)
+    {
+        CHECK(vs_manifest_serialize(out, &new_data, &new_size) == VS_OK);
+        CHECK(new_size == size);
+        CHECK(new_data && memcmp(new_data, data, new_size) == 0);
+    }
+
+    free(new_data);
+    free(data);
+    vs_manifest_free(out);
+    vs_manifest_free(man);
+}
+
+static void test_vs_manifest_parse_corrupt(void)
+{
+    const char* valid =
+        "vaultsync-manifest 1\n"
+        "source C:/src\n"
+        "created 20261126T205617Z\n"
+        "dir 0 0 d\n"
+        "file 1500000 1 2 d/a.jpg\n"
+        "chunk af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\n"
+        "chunk 2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213\n"
+        "end 2\n";
+
+#define MAN_HEAD "vaultsync-manifest 1\nsource C:/src\ncreated 20261126T205617Z\n"
+#define MAN_ID   "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+
+    const char* bad[] = {
+        "vaultsync-manifest 2\nsource C:/src\ncreated 20261126T205617Z\nend 0\n",   /* version */
+        "vaultsync-manifest 1\r\nsource C:/src\r\ncreated 20261126T205617Z\r\nend 0\r\n", /* CRLF */
+        "vaultsync-manifest 1\ncreated 20261126T205617Z\nsource C:/src\nend 0\n",   /* header order */
+        MAN_HEAD "dir 5x0 0 d\nend 1\n",                        /* garbage in number */
+        MAN_HEAD "dir 0  0 d\nend 1\n",                         /* double space */
+        MAN_HEAD "dir -1 0 d\nend 1\n",                         /* negative */
+        MAN_HEAD "dir 007 0 d\nend 1\n",                        /* leading zero */
+        MAN_HEAD "dir 18446744073709551616 0 d\nend 1\n",       /* overflow */
+        MAN_HEAD "dir 0 0 \nend 1\n",                           /* empty path */
+        MAN_HEAD "file 1500000 1 1 a\nchunk " MAN_ID "\nend 1\n",               /* count != size */
+        MAN_HEAD "file 1500000 1 2 a\nchunk " MAN_ID "\nend 1\n",               /* missing chunk */
+        MAN_HEAD "file 1 1 1 a\nchunk " MAN_ID "\nchunk " MAN_ID "\nend 1\n",   /* extra chunk */
+        MAN_HEAD "dir 0 0 d\nchunk " MAN_ID "\nend 1\n",        /* chunk after dir */
+        MAN_HEAD "file 1 1 1 a\nchunk AF1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\nend 1\n", /* uppercase id */
+        MAN_HEAD "foo 1\nend 0\n",                              /* unknown keyword */
+        MAN_HEAD "\nend 0\n",                                   /* empty line */
+        MAN_HEAD "end 1\n",                                     /* wrong count */
+        MAN_HEAD "end 0x\n",                                    /* trailing garbage */
+        MAN_HEAD "end 0\ndir 0 0 d\n",                          /* line after end */
+        MAN_HEAD "dir 0 0 d\n",                                 /* no end */
+        MAN_HEAD "end 0",                                       /* no final newline */
+    };
+
+#undef MAN_HEAD
+#undef MAN_ID
+
+    vs_manifest_t* man = NULL;
+
+    /* sanity: the valid one parses */
+    CHECK(vs_manifest_parse(valid, strlen(valid), &man) == VS_OK);
+    vs_manifest_free(man);
+
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i)
+    {
+        man = NULL;
+        int rc = vs_manifest_parse(bad[i], strlen(bad[i]), &man);
+        if (rc != VS_ERR_CORRUPT)
+            fprintf(stderr, "  bad[%zu] gave %d\n", i, rc);
+        CHECK(rc == VS_ERR_CORRUPT);
+        CHECK(man == NULL);
+        vs_manifest_free(man);
+    }
+
+    /* NUL byte inside the data */
+    char with_nul[64];
+    memcpy(with_nul, valid, sizeof(with_nul));
+    with_nul[30] = '\0';
+    CHECK(vs_manifest_parse(with_nul, sizeof(with_nul), &man) == VS_ERR_CORRUPT);
+
+    /* every truncation of a valid manifest must fail */
+    size_t len = strlen(valid);
+    for (size_t n = 0; n < len; ++n)
+    {
+        man = NULL;
+        int rc = vs_manifest_parse(valid, n, &man);
+        CHECK(rc != VS_OK);
+        CHECK(man == NULL);
+        vs_manifest_free(man);
+    }
+}
+
+/* Damage one byte at a time. Any result is fine (a flipped letter in a path
+   is still valid), but parse must never crash, leak, or hand back a manifest
+   on error. Run under ASan to catch out-of-bounds reads. */
+static void test_vs_manifest_parse_flip(void)
+{
+    const char* valid =
+        "vaultsync-manifest 1\n"
+        "source C:/src\n"
+        "created 20261126T205617Z\n"
+        "dir 0 0 d\n"
+        "file 1500000 1 2 d/a b.jpg\n"
+        "chunk af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262\n"
+        "chunk 2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213\n"
+        "file 0 2 0 empty.txt\n"
+        "end 3\n";
+
+    const unsigned char masks[] = { 0x01, 0x20, 0x80 };
+    size_t len = strlen(valid);
+    char buf[512];
+
+    CHECK(len <= sizeof(buf));
+    if (len > sizeof(buf))
+        return;
+
+    size_t ok = 0, corrupt = 0;
+    for (size_t m = 0; m < sizeof(masks); ++m)
+    {
+        for (size_t i = 0; i < len; ++i)
+        {
+            memcpy(buf, valid, len);
+            buf[i] ^= masks[m];
+
+            vs_manifest_t* man = NULL;
+            int rc = vs_manifest_parse(buf, len, &man);
+            if (rc == VS_OK)
+            {
+                CHECK(man != NULL);
+                ok++;
+            }
+            else
+            {
+                CHECK(rc == VS_ERR_CORRUPT);
+                CHECK(man == NULL);
+                corrupt++;
+            }
+            vs_manifest_free(man);
+        }
+    }
+
+    /* most single-byte damage must be detected */
+    CHECK(corrupt > ok);
+}
+
 int main(int argc, char** argv)
 {
-#ifdef VS_LEAK_CHECK
+#ifdef VS_CRT_DEBUG
     /* Send CRT reports (leaks, heap corruption, abort) to stderr instead of
        a message box, so ctest never hangs waiting for someone to click OK. */
     _CrtSetReportMode(_CRT_WARN,   _CRTDBG_MODE_FILE);
@@ -1247,9 +1661,12 @@ int main(int argc, char** argv)
     _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 
-    /* Snapshot of the heap before any test runs. */
-    _CrtMemState mem_before, mem_after, mem_diff;
-    _CrtMemCheckpoint(&mem_before);
+    /* To find where block {N} from a leak report was allocated, uncomment
+       and run under the debugger: it breaks on that malloc. */
+    /* _CrtSetBreakAlloc(N); */
+#endif
+#ifndef VS_LEAK_CHECK
+    printf("note: leak check disabled (ASan build or non-MSVC/Debug)\n");
 #endif
 
     Test tests[] = {
@@ -1279,6 +1696,14 @@ int main(int argc, char** argv)
         TEST(test_vs_local_put_object),
         TEST(test_vs_local_get_object),
         TEST(test_vs_local_snapshots),
+        TEST(test_vs_manifest_create),
+        TEST(test_vs_manifest_add_entry),
+        TEST(test_vs_manifest_add_chunk),
+        TEST(test_vs_manifest_serialize),
+        TEST(test_manifest_parse),
+        TEST(test_vs_manifest_roundtrip),
+        TEST(test_vs_manifest_parse_corrupt),
+        TEST(test_vs_manifest_parse_flip),
     };
     /* No argument: run every test. One argument: run only the test with that
        name (ctest registers each test this way, see CMakeLists.txt). */
@@ -1290,25 +1715,25 @@ int main(int argc, char** argv)
         if (only && strcmp(only, tests[i].name) != 0)
             continue;
         printf("TEST %s\n", tests[i].name);
-        tests[i].func();
         ran++;
-    }
-    if (ran == 0)
-    {
-        fprintf(stderr, "no test named %s\n", only);
-        return 1;
-    }
+#ifdef VS_LEAK_CHECK
+        _CrtMemState mem_before, mem_after, mem_diff;
+        _CrtMemCheckpoint(&mem_before);
+#endif
+
+        tests[i].func();
 
 #ifdef VS_LEAK_CHECK
-    /* Anything still allocated that wasn't before is a leak. */
-    _CrtMemCheckpoint(&mem_after);
-    if (_CrtMemDifference(&mem_diff, &mem_before, &mem_after))
-    {
-        fprintf(stderr, "MEMORY LEAK detected:\n");
-        _CrtMemDumpStatistics(&mem_diff);
-        g_failures++;
-    }
+        /* Anything still allocated that wasn't before this test is a leak. */
+        _CrtMemCheckpoint(&mem_after);
+        if (_CrtMemDifference(&mem_diff, &mem_before, &mem_after))
+        {
+            fprintf(stderr, "MEMORY LEAK in %s:\n", tests[i].name);
+            _CrtMemDumpAllObjectsSince(&mem_before);
+            g_failures++;
+        }
 #endif
+    }
 
     return g_failures ? 1 : 0;
 }
